@@ -92,7 +92,7 @@ function unlock(){return [hero('مصادري المحفوظة','تسجيل ال�
 const symbols=['ϟ','⚗','✿','Aa','∑'];
 function home(){
   const subjects=cache.subjects,grid=wrap('grid');
-  const render=q=>{const hits=subjects.filter(s=>s.name.includes(q));grid.replaceChildren(...hits.map(s=>tile(s.name,(s.docs+(readings.some(r=>r[0]===s.name)?1:0))+' مصادر'+(s.page?' · صفحة '+s.page:''),symbols[(s.id-1)%5],()=>{tab='sources';return go('subject',s);})));if(!hits.length)grid.append(el('p','ما في مادة بهذا الاسم.'));};
+  const render=q=>{const hits=subjects.filter(s=>s.name.includes(q));grid.replaceChildren(...hits.map(s=>tile(s.name,(s.docs)+' مصادر'+(s.page?' · صفحة '+s.page:''),symbols[(s.id-1)%5],()=>{tab='sources';return go('subject',s);})));if(!hits.length)grid.append(el('p','ما في مادة بهذا الاسم.'));};
   const search=el('input');search.type='search';search.placeholder='ابحث عن مادة';search.setAttribute('aria-label',search.placeholder);search.oninput=()=>render(search.value.trim());render('');
   const waiting=cache.feedback.filter(x=>!x.reply).length;
   const active=owner?cache.students.filter(s=>Number(s.last_seen)>Date.now()-24*3600000).length:0;
@@ -155,10 +155,7 @@ async function subject(item){
   const items=[];let count=0;const dayCounts={};for(const d of content.sources){const k=date(d.created);dayCounts[k]=(dayCounts[k]||0)+1;}
   for(const d of content.sources){const day=date(d.created);if(day!==last){items.push(el('h2',day));last=day;count=dayCounts[day];}items.push(button('مصدر '+count--+' · '+d.title+(owner&&d.added_by?' · '+d.added_by:''),()=>go('source',d),'tile'));}
   const add=el('details','','add-source');add.append(el('summary','＋ إضافة صورة مصدر'),sourceForm());
-  const intro=readings.find(r=>r[0]===s.name);
-  const sample=intro&&el('details','','card reading');
-  if(sample)sample.append(el('summary',intro[1]),el('small','قراءة تمهيدية مرفقة بالتطبيق'),el('pre',intro[2]));
-  return [hero(s.name,s.page?'وصل الصف إلى صفحة '+s.page:'مكتبة المادة'),controls,el('h2','مصادر المادة'),offline&&locked?button('فتح مصادري المحفوظة',()=>go('unlock')):add,sample,...items,owner&&form('تقدّم الصف',[field('رقم الصفحة','page','number',s.page||'')],'حفظ الصفحة',async d=>{await rpc('progress',{subject:s.id,page:Number(d.page)});await go('subject',s);})];
+  return [hero(s.name,s.page?'وصل الصف إلى صفحة '+s.page:'مكتبة المادة'),controls,el('h2','مصادر المادة'),offline&&locked?button('فتح مصادري المحفوظة',()=>go('unlock')):add,...items,owner&&form('تقدّم الصف',[field('رقم الصفحة','page','number',s.page||'')],'حفظ الصفحة',async d=>{await rpc('progress',{subject:s.id,page:Number(d.page)});await go('subject',s);})];
 }
 async function source(item){const record=await rpc('source',{id:item.id});const img=el('img');img.src=record.image instanceof Blob?(previewUrl=URL.createObjectURL(record.image)):record.image;img.alt='صورة المصدر';
   return [button('العودة للمادة',()=>go('subject',selected)),hero(record.title,date(record.created)+(owner&&record.added_by?' · أضافه '+record.added_by:'')),wrap('card',el('pre',record.body),img),owner&&button('حذف المصدر',async()=>{if(confirm('حذف هذا المصدر من الصف؟')){await rpc('remove',{id:item.id});await go('subject',selected);}})];}
