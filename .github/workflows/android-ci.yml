@@ -1,0 +1,81 @@
+name: Android apps - validate and package
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check JavaScript syntax
+        run: |
+          node --check android/room/room.js
+          node --check android/room/library.js
+          node --check android/offline/source.js
+          node --check web/admin.js
+          node --check web/student.js
+          node --check web/common.js
+          node --check server.mjs
+      - name: Test server and data workflows
+        run: npm test
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install Android platform and build tools
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;35.0.0" "platform-tools"
+      - name: Prepare signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SCHOOL_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.SCHOOL_KEY_PASSWORD }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/signing"
+          export SCHOOL_KEYSTORE="$RUNNER_TEMP/signing/school.keystore"
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$SCHOOL_KEYSTORE"
+            printf 'SCHOOL_SIGN_MODE=release\n' >> "$GITHUB_ENV"
+            printf 'SCHOOL_KEY_PASSWORD=%s\n' "$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          else
+            keytool -genkeypair -keystore "$SCHOOL_KEYSTORE" -storepass androidtest -keypass androidtest \
+              -alias dafaa -keyalg RSA -keysize 3072 -validity 1000 -dname "CN=Qum Dorous Preview"
+            printf 'SCHOOL_SIGN_MODE=preview\n' >> "$GITHUB_ENV"
+            printf 'SCHOOL_KEY_PASSWORD=androidtest\n' >> "$GITHUB_ENV"
+          fi
+          printf 'SCHOOL_KEYSTORE=%s\n' "$SCHOOL_KEYSTORE" >> "$GITHUB_ENV"
+          printf 'SCHOOL_KEY_ALIAS=dafaa\n' >> "$GITHUB_ENV"
+      - name: Build Android student application
+        run: |
+          mkdir -p dist
+          bash android/build.sh dist/QumDorous-Student.apk student
+      - name: Build Android owner application
+        run: bash android/build.sh dist/QumDorous-Owner.apk owner
+      - name: Publish both APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: QumDorous-Android-${{ env.SCHOOL_SIGN_MODE }}
+          path: |
+            dist/QumDorous-Student.apk
+            dist/QumDorous-Owner.apk
+          retention-days: 30
+          if-no-files-found: error
