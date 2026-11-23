@@ -17,8 +17,8 @@ test('ships separate student and owner launchers without the hosted web app', ()
     const source = read('android/' + manifest);
     assert.ok(source.includes('package="' + id + '"'));
     assert.ok(source.includes('android:name="' + activity + '"'));
-    assert.match(source, /android:versionCode="15"/);
-    assert.match(source, /android:versionName="0\.7\.2"/);
+    assert.match(source, /android:versionCode="16"/);
+    assert.match(source, /android:versionName="0\.7\.3"/);
     assert.match(source, /android:usesCleartextTraffic="false"/);
     assert.doesNotMatch(source, /android.intent.category.BROWSABLE/);
   }
@@ -37,6 +37,8 @@ test('student registration is local and only the registration notice is sent to 
   const registration = read('android/src/school/dafaa/LocalRegistration.java');
   assert.match(registration, /RoomStore\.obj\("op", "registerLocal", "id", id, "name", name\)/);
   assert.doesNotMatch(registration, /password|verifier|salt/);
+  assert.match(registration, /RoomStore\.obj\("op", "localNotices", "id", id\)/);
+  assert.match(read('android/src/school/dafaa/RoomStore.java'), /SELECT id,title,body,created FROM posts ORDER BY id DESC/);
 });
 
 test('the bottom bar opens role-specific pages and keeps Materials selected inside a lesson', () => {
@@ -69,14 +71,39 @@ test('the bottom bar opens role-specific pages and keeps Materials selected insi
     };
     runInNewContext(script.slice(start, end) + '\nnavigation();', globals);
     assert.deepEqual(Array.from(nav.children, item => item.dataset.page),
-      owner ? ['home', 'feed', 'feedback', 'accounts', 'settings'] : ['home', 'settings']);
+      owner ? ['home', 'feed', 'feedback', 'accounts', 'settings'] : ['home', 'feed', 'settings']);
     assert.equal(nav.children[0].attrs['aria-current'], 'page');
     nav.children.at(-1).click();
-    assert.deepEqual(activity, ['settings']);
+    nav.children[1].click();
+    assert.deepEqual(activity, ['settings','feed']);
     globals.name = '';
     runInNewContext('navigation();', globals);
     assert.equal(nav.hidden, true);
   }
+});
+
+test('the student inbox keeps received notices visible offline', async () => {
+  const script = read('android/room/room.js');
+  const start = script.indexOf('function noticeCards(');
+  const end = script.indexOf('function feed()', start);
+  const list = { isConnected: true, replaceChildren(...children) { this.children = children; } };
+  const notice = { created: 0, title: 'موعد الدرس', body: 'الدرس غدًا' };
+  const requests = [];
+  const env = {
+    $: () => list, window: {}, date: String, el: (_tag, text) => text,
+    wrap: (_class, ...items) => items, online: true,
+    rpc: async (op, options) => {
+      requests.push([op, options.refresh]);
+      return { notices: [notice], online: env.online };
+    },
+  };
+  await runInNewContext(script.slice(start, end) + '\nrefreshStudentNotices(true);', env);
+  assert.deepEqual(Array.from(list.children[0]), ['0', notice.title, notice.body]);
+  env.online = false;
+  await runInNewContext('refreshStudentNotices();', env);
+  assert.match(list.children[0], /المحفوظة على الهاتف/);
+  assert.deepEqual(Array.from(list.children[1]), ['0', notice.title, notice.body]);
+  assert.deepEqual(requests, [['studentNotices', true], ['studentNotices', false]]);
 });
 
 test('the packaged offline catalog contains valid Arabic subject data', () => {

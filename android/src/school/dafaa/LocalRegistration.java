@@ -17,6 +17,14 @@ final class LocalRegistration {
     private static final String FINGERPRINT = "fp";
     private final NsdManager manager;
     private NsdManager.RegistrationListener advertisement;
+    private Endpoint cachedEndpoint;
+    private long endpointExpires;
+
+    private static final class Endpoint {
+        final InetAddress host;
+        final String fingerprint;
+        Endpoint(InetAddress host, String fingerprint) { this.host = host; this.fingerprint = fingerprint; }
+    }
 
     LocalRegistration(Context context) {
         manager = (NsdManager) context.getSystemService(Context.NSD_SERVICE);
@@ -49,7 +57,11 @@ final class LocalRegistration {
         advertisement = null;
     }
 
-    String send(String id, String name, String pinnedOwner) throws Exception {
+    private Endpoint discover(String pinnedOwner) throws Exception {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (cachedEndpoint != null && endpointExpires > now && pinnedOwner.equals(cachedEndpoint.fingerprint)) {
+            return cachedEndpoint;
+        }
         Map<String, NsdServiceInfo> found = new HashMap<>();
         CountDownLatch failed = new CountDownLatch(1);
         NsdManager.DiscoveryListener discovery = new NsdManager.DiscoveryListener() {
@@ -90,8 +102,28 @@ final class LocalRegistration {
         if (host == null || attribute == null) return null;
         String fingerprint = new String(attribute, StandardCharsets.US_ASCII);
         if (!fingerprint.matches("[a-f0-9]{64}") || (!pinnedOwner.isEmpty() && !pinnedOwner.equals(fingerprint))) return null;
-        JSONObject response = RoomLink.call(host, fingerprint, RoomStore.obj("op", "registerLocal", "id", id, "name", name));
+        cachedEndpoint = new Endpoint(host, fingerprint);
+        endpointExpires = android.os.SystemClock.elapsedRealtime() + 60000;
+        return cachedEndpoint;
+    }
+
+    String send(String id, String name, String pinnedOwner) throws Exception {
+        Endpoint endpoint = discover(pinnedOwner);
+        if (endpoint == null) return null;
+        JSONObject response = request(endpoint, RoomStore.obj("op", "registerLocal", "id", id, "name", name));
         JSONObject value = response.optJSONObject("value");
-        return value != null && value.optBoolean("registered") ? fingerprint : null;
+        return value != null && value.optBoolean("registered") ? endpoint.fingerprint : null;
+    }
+
+    JSONObject notices(String id, String pinnedOwner) throws Exception {
+        if (pinnedOwner.isEmpty()) return null;
+        Endpoint endpoint = discover(pinnedOwner);
+        if (endpoint == null) return null;
+        return request(endpoint, RoomStore.obj("op", "localNotices", "id", id)).optJSONObject("value");
+    }
+
+    private JSONObject request(Endpoint endpoint, JSONObject request) throws Exception {
+        try { return RoomLink.call(endpoint.host, endpoint.fingerprint, request); }
+        catch (Exception failure) { cachedEndpoint = null; throw failure; }
     }
 }

@@ -24,6 +24,8 @@ public final class RoomActivity extends Activity {
     private final java.util.concurrent.atomic.AtomicBoolean registrationInFlight=new java.util.concurrent.atomic.AtomicBoolean();
     private final android.os.Handler registrationTimer=new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable retryRegistration=this::deliverRegistration;
+    private volatile boolean foreground;
+    private volatile boolean noticesConnected;
     private String backupPassword;
     private String restorePassword;
     @Override public void onCreate(Bundle saved){
@@ -68,7 +70,18 @@ public final class RoomActivity extends Activity {
             }});
         web.addJavascriptInterface(new Bridge(),"Classroom");web.loadUrl(base+"room.html");
         if(owner&&!token.isEmpty())tasks.execute(this::startRegistrationService);
+    }
+
+    @Override protected void onStart(){
+        super.onStart();
+        foreground=true;
         if(!owner)registrationTimer.post(retryRegistration);
+    }
+
+    @Override protected void onStop(){
+        foreground=false;
+        registrationTimer.removeCallbacks(retryRegistration);
+        super.onStop();
     }
 
     private void registrationArrived(String name){
@@ -92,9 +105,9 @@ public final class RoomActivity extends Activity {
     private SharedPreferences localData(){return getSharedPreferences("offline_student",MODE_PRIVATE);}
 
     private void deliverRegistration(){
-        if(isFinishing()||isDestroyed())return;
+        if(!foreground||isFinishing()||isDestroyed())return;
         SharedPreferences local=localData();
-        if(!local.contains("hash")||local.getBoolean("registrationSent",false)||!registrationInFlight.compareAndSet(false,true))return;
+        if(!local.getBoolean("remembered",false)||!registrationInFlight.compareAndSet(false,true))return;
         registrationTask.execute(()->{
             try{
                 String id=local.getString("registrationId","");
@@ -102,16 +115,41 @@ public final class RoomActivity extends Activity {
                     id=RoomStore.random(18);
                     if(!local.edit().putString("registrationId",id).commit())throw new IllegalStateException();
                 }
-                String pin=registration.send(id,local.getString("name",""),local.getString("registeredOwner",""));
-                if(pin!=null&&local.edit().putString("registeredOwner",pin).putBoolean("registrationSent",true).commit()){
-                    runOnUiThread(()->{
-                        if(!isFinishing()&&!isDestroyed())web.evaluateJavascript("if(window.registrationDelivered)window.registrationDelivered()",null);
-                    });
+                String pin=local.getString("registeredOwner","");
+                if(!local.getBoolean("registrationSent",false)||pin.isEmpty()){
+                    String registered=registration.send(id,local.getString("name",""),pin);
+                    if(registered!=null&&local.edit().putString("registeredOwner",registered).putBoolean("registrationSent",true).commit()){
+                        pin=registered;
+                        runOnUiThread(()->{
+                            if(!isFinishing()&&!isDestroyed())web.evaluateJavascript("if(window.registrationDelivered)window.registrationDelivered()",null);
+                        });
+                    }
                 }
-            }catch(Exception ignored){}
-            registrationInFlight.set(false);
-            if(!registrationTask.isShutdown()&&!local.getBoolean("registrationSent",false))
-                registrationTimer.postDelayed(retryRegistration,8000);
+                JSONObject reply=registration.notices(id,pin);
+                JSONArray latest=reply==null?null:reply.optJSONArray("notices");
+                if(reply!=null&&!reply.optBoolean("registered"))local.edit().putBoolean("registrationSent",false).apply();
+                updateStudentNotices(local,latest);
+            }catch(Exception ignored){
+                updateStudentNotices(local,null);
+            }finally{
+                registrationInFlight.set(false);
+                if(foreground&&!registrationTask.isShutdown())registrationTimer.postDelayed(retryRegistration,12000);
+            }
+        });
+    }
+
+    private void updateStudentNotices(SharedPreferences local,JSONArray latest){
+        boolean online=latest!=null, changed=online!=noticesConnected;
+        if(online){
+            String json=latest.toString();
+            if(!json.equals(local.getString("noticeCache","[]"))){
+                local.edit().putString("noticeCache",json).apply();
+                changed=true;
+            }
+        }
+        noticesConnected=online;
+        if(changed)runOnUiThread(()->{
+            if(!isFinishing()&&!isDestroyed())web.evaluateJavascript("if(window.noticesUpdated)window.noticesUpdated()",null);
         });
     }
 
@@ -160,6 +198,13 @@ public final class RoomActivity extends Activity {
                         value=RoomStore.obj();
                     }else if(!owner&&(op.equals("register")||op.equals("unlock"))){
                         value=studentAccount(op,p);
+                    }else if(!owner&&op.equals("studentNotices")){
+                        if(!localData().getBoolean("remembered",false))throw new Exception("سجّل الدخول لعرض الإشعارات.");
+                        if(p.optBoolean("refresh")){
+                            registrationTimer.removeCallbacks(retryRegistration);
+                            registrationTimer.post(retryRegistration);
+                        }
+                        value=RoomStore.obj("notices",new JSONArray(localData().getString("noticeCache","[]")),"online",noticesConnected);
                     }else if(!owner&&op.equals("notes")){
                         runOnUiThread(()->startActivity(new Intent(RoomActivity.this,MainActivity.class).putExtra("savedNotes",true)));
                         value=RoomStore.obj();

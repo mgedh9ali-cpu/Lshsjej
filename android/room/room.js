@@ -42,7 +42,7 @@ function form(title,fields,label,fn){
     catch(err){status.textContent=err.message;}finally{submit.disabled=false;}};
   return f;
 }
-const links=()=>[['home',owner?'لوحة الصف':'المواد'],...(owner?[['feed','الإشعارات'],['feedback','الاقتراحات'],['accounts','الطلاب']]:[]),['settings','الإعدادات']];
+const links=()=>[['home',owner?'لوحة الصف':'المواد'],['feed','الإشعارات'],...(owner?[['feedback','الاقتراحات'],['accounts','الطلاب']]:[]),['settings','الإعدادات']];
 // Icon geometry from Lucide (ISC), https://lucide.dev/license.
 const navIconPaths={
   home:['m3 10 9-7 9 7v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z','M9 21v-6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v6'],
@@ -117,6 +117,7 @@ async function go(next,item,focusPage=false){
     if(mine===revision){
       main.replaceChildren(...nodes.filter(Boolean));window.scrollTo(0,0);
       if(next==='accounts')refreshRegistrations($('#registrations'));
+      if(next==='feed'&&!owner)refreshStudentNotices(true).catch(err=>message(err.message));
       if(focusPage){
         const heading=main.querySelector('h1');
         heading.tabIndex=-1;heading.focus({preventScroll:true});
@@ -166,8 +167,30 @@ function home(){
     owner&&wrap('grid stat-grid',tile('تسجيلات الطلاب','عرض المسجلين','◉',()=>go('accounts')),tile('صندوق الاقتراحات',number.format(waiting)+' بانتظار الرد','✉',()=>go('feedback')),tile('إشعار جديد','إرسال إلى الصف','＋',()=>go('feed'))),
     owner&&el('h2','المواد الدراسية','section-title'),search,grid,owner&&form('مادة جديدة',[field('اسم المادة','name')],'إضافة مادة',async d=>{await rpc('addSubject',d);await go('home');})];
 }
-function feed(){if(offline)return [hero('أخبار الصف والإشعارات','قوم دروس'),el('p','تظهر هنا الإعلانات التي ينشرها المالك بعد ربط حساب الصف.'),button('إعدادات الصف',()=>go('settings'))];return [hero('الإشعارات','أخبار الصف وتذكيراته'),owner&&form('إشعار عام',[field('العنوان','title'),field('نص الإشعار','body','textarea')],'نشر للطلاب',async d=>{await rpc('notice',d);await go('feed');}),
-  ...cache.notices.map(n=>wrap('card',el('small',date(n.created)),el('h3',n.title),el('pre',n.body))),!cache.notices.length&&el('p','ستظهر أخبار الصف هنا عند نشرها.'),button('تحديث',()=>go('feed'))];}
+function noticeCards(notices){
+  return notices.map(n=>wrap('card',el('small',date(n.created)),el('h3',n.title),el('pre',n.body)));
+}
+async function refreshStudentNotices(refresh=false){
+  const list=$('#student-notices');
+  if(!list)return;
+  const {notices,online}=await rpc('studentNotices',{refresh});
+  if(!list.isConnected)return;
+  const status=online?(notices.length?'':'لا توجد إشعارات بعد.')
+    :notices.length?'تعذّر الوصول إلى لوحة المالك. هذه الإشعارات المحفوظة على الهاتف.'
+    :'افتح لوحة المالك على نفس شبكة الواي فاي لاستقبال الإشعارات.';
+  list.replaceChildren(...(status?[el('p',status,'empty-state')]:[]),...noticeCards(notices));
+}
+window.noticesUpdated=()=>refreshStudentNotices().catch(()=>{});
+function feed(){
+  const heading=hero('الإشعارات','أخبار الصف وتذكيراته');
+  if(!owner){
+    const list=wrap('registration-list');list.id='student-notices';list.setAttribute('aria-live','polite');
+    return [heading,button('تحديث الإشعارات',()=>refreshStudentNotices(true)),list];
+  }
+  return [heading,form('إشعار عام',[field('العنوان','title'),field('نص الإشعار','body','textarea')],'نشر للطلاب',async data=>{
+    await rpc('notice',data);await go('feed');
+  }),...noticeCards(cache.notices),!cache.notices.length&&el('p','ستظهر أخبار الصف هنا عند نشرها.'),button('تحديث',()=>go('feed'))];
+}
 const date=v=>new Intl.DateTimeFormat('ar-SY',{weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(v);
 function feedback(){if(offline)return [hero('اقتراحاتي','صندوق الطالب'),el('p','اربط حساب الصف لإرسال اقتراح وقراءة ردّ المالك.'),button('إعدادات الصف',()=>go('settings'))];return [hero(owner?'صندوق الاقتراحات':'اقتراحاتي',owner?'مراجعة رسائل الطلاب':'رسائلي وردود المالك'),!owner&&form('اقتراح جديد',[field('اكتب اقتراحك','body','textarea')],'إرسال للمالك',async d=>{await rpc('suggest',d);await go('feedback');}),
   ...cache.feedback.map(f=>wrap('card',el('small',f.name+' · '+date(f.created)),el('pre',f.body),el('b',f.reply?'رد المالك':'بانتظار الرد'),el('pre',f.reply||''),...(owner?[form('الرد',[field('نص الرد','body','textarea',f.reply||'')],'حفظ الرد',async d=>{await rpc('reply',{...d,id:f.id});await go('feedback');})]:[]))),button('تحديث',()=>go('feedback'))];}

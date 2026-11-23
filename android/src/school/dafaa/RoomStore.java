@@ -178,6 +178,15 @@ final class RoomStore {
         String op=check(p,"op",40);
         boolean first=rows("SELECT 1 FROM accounts WHERE owner=1").length()==0;
         if(op.equals("status"))return obj("setup",owner&&first);
+        if(op.equals("localNotices")){
+            if(owner||first)throw new Exception("لوحة المالك غير متاحة.");
+            String registrationId=check(p,"id",40);
+            if(!registrationId.matches("[A-Za-z0-9_-]{24}")||
+                rows("SELECT 1 FROM local_registrations WHERE id=?",registrationId).length()==0)
+                return obj("registered",false);
+            rate("local-notices:"+registrationId,30,60000);
+            return obj("registered",true,"notices",rows("SELECT id,title,body,created FROM posts ORDER BY id DESC LIMIT 20"));
+        }
         if(op.equals("registerLocal")){
             if(owner||first)throw new Exception("لوحة المالك غير جاهزة لاستقبال التسجيل.");
             rate("register-local",60,60000);
