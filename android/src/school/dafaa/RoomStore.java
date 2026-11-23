@@ -5,6 +5,9 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteStatement;
 import android.util.Base64;
+import java.io.*;
+import javax.crypto.*;
+import javax.crypto.spec.*;
 import org.json.*;
 import java.util.*;
 import java.security.*;
@@ -14,10 +17,13 @@ import javax.crypto.spec.PBEKeySpec;
 
 final class RoomStore {
     private final SQLiteDatabase db;
+    private final Context context;
     private final Map<String,long[]> attempts = new HashMap<>();
     private static final SecureRandom RNG = new SecureRandom();
     RoomStore(Context c){
-        db=c.openOrCreateDatabase("classroom.db",Context.MODE_PRIVATE,null);
+        context=c.getApplicationContext();
+        db=context.openOrCreateDatabase("classroom.db",Context.MODE_PRIVATE,null);
+        db.disableWriteAheadLogging();
         db.execSQL("CREATE TABLE IF NOT EXISTS accounts(name TEXT PRIMARY KEY, salt TEXT NOT NULL, verifier TEXT NOT NULL, owner INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, name TEXT NOT NULL, owner INTEGER NOT NULL, created INTEGER NOT NULL)");
         db.execSQL("CREATE INDEX IF NOT EXISTS sessions_account ON sessions(name,owner)");
@@ -32,6 +38,79 @@ final class RoomStore {
         if(!hasColumn("sources","added_by"))db.execSQL("ALTER TABLE sources ADD COLUMN added_by TEXT");
         for(String subject:new String[]{"الفيزياء","الكيمياء","العلوم","الإنجليزي","الرياضيات"})
             db.execSQL("INSERT OR IGNORE INTO subjects(name) VALUES(?)",new Object[]{subject});
+    }
+
+    private static final byte[] BACKUP_MAGIC=new byte[]{'Q','U','M','D','B','0','0','1'};
+    private static final int BACKUP_ITERATIONS=220000;
+    private static void transfer(InputStream input,OutputStream output)throws IOException{
+        byte[] block=new byte[32768];int count;
+        while((count=input.read(block))!=-1)output.write(block,0,count);
+    }
+    private static SecretKeySpec backupKey(String phrase,byte[] salt)throws Exception{
+        if(phrase==null||phrase.length()<12||phrase.length()>200)throw new Exception("كلمة مرور النسخة يجب أن تحتوي على 12 حرفًا على الأقل.");
+        PBEKeySpec spec=new PBEKeySpec(phrase.toCharArray(),salt,BACKUP_ITERATIONS,256);
+        try{return new SecretKeySpec(SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1").generateSecret(spec).getEncoded(),"AES");}
+        finally{spec.clearPassword();}
+    }
+    synchronized void writeEncryptedBackup(OutputStream destination,String passphrase)throws Exception{
+        try(Cursor status=db.rawQuery("PRAGMA integrity_check",null)){
+            if(!status.moveToFirst()||!"ok".equals(status.getString(0)))
+                throw new Exception("تعذّر التأكد من قاعدة البيانات.");
+        }
+        db.disableWriteAheadLogging();
+        byte[] salt=new byte[16],nonce=new byte[12];RNG.nextBytes(salt);RNG.nextBytes(nonce);
+        Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE,backupKey(passphrase,salt),new GCMParameterSpec(128,nonce));
+        destination.write(BACKUP_MAGIC);destination.write(salt);destination.write(nonce);
+        try(InputStream source=new FileInputStream(db.getPath());
+            CipherOutputStream encrypted=new CipherOutputStream(destination,cipher)){
+            transfer(source,encrypted);
+        }
+    }
+    synchronized void restoreEncryptedBackup(InputStream stream,String passphrase)throws Exception{
+        DataInputStream input=new DataInputStream(stream);
+        byte[] magic=new byte[8],salt=new byte[16],nonce=new byte[12];
+        input.readFully(magic);input.readFully(salt);input.readFully(nonce);
+        if(!MessageDigest.isEqual(magic,BACKUP_MAGIC))throw new Exception("هذا ليس ملف نسخة احتياطية من قوم دروس.");
+        Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE,backupKey(passphrase,salt),new GCMParameterSpec(128,nonce));
+        File staging=File.createTempFile("room-restore-",".sqlite",context.getCacheDir());
+        File previous=File.createTempFile("room-previous-",".sqlite",context.getCacheDir());
+        File current=new File(db.getPath());
+        boolean closed=false;
+        try{
+            try(CipherInputStream decrypted=new CipherInputStream(input,cipher);
+                OutputStream output=new FileOutputStream(staging)){
+                transfer(decrypted,output);
+            }catch(Exception invalid){throw new Exception("تعذّر فك النسخة. تحقق من كلمة المرور وسلامة الملف.");}
+            SQLiteDatabase check=SQLiteDatabase.openDatabase(staging.getPath(),null,SQLiteDatabase.OPEN_READONLY);
+            try{
+                try(Cursor status=check.rawQuery("PRAGMA integrity_check",null)){
+                    if(!status.moveToFirst()||!"ok".equals(status.getString(0)))
+                        throw new Exception("ملف النسخة تالف.");
+                }
+                String[] tables={"accounts","subjects","sources","quizzes","results","posts","feedback"};
+                for(String table:tables){
+                    try(Cursor found=check.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",new String[]{table})){
+                        if(!found.moveToFirst())throw new Exception("ملف النسخة غير متوافق مع التطبيق.");
+                    }
+                }
+            }finally{check.close();}
+            db.disableWriteAheadLogging();
+            try(InputStream source=new FileInputStream(current);
+                OutputStream backup=new FileOutputStream(previous)){transfer(source,backup);}
+            db.close();closed=true;
+            try(InputStream source=new FileInputStream(staging);
+                OutputStream result=new FileOutputStream(current)){transfer(source,result);}
+            // The activity is restarted after restoration to open the new SQLite connection.
+        }catch(Exception failure){
+            if(closed){
+                try(InputStream source=new FileInputStream(previous);
+                    OutputStream result=new FileOutputStream(current)){transfer(source,result);}
+                catch(Exception rollback){failure.addSuppressed(rollback);}
+            }
+            throw failure;
+        }finally{staging.delete();previous.delete();}
     }
     private boolean hasColumn(String table,String column){
         try(Cursor cursor=db.rawQuery("PRAGMA table_info("+table+")",null)){
