@@ -1,8 +1,8 @@
 'use strict';
 const $=sel=>document.querySelector(sel);
 const main=$('main'), drawer=$('#drawer'), appBar=$('.app-bar'), menu=$('#menu'), shade=$('#shade'), pending=new Map();
-let serial=0,revision=0,page='login',name='',owner=false,paired=false,setup=false,cache,selected,hideTimer;
-let offline=false,hasAccount=false,locked=false,savedSession=false,previewUrl=null;
+let serial=0,revision=0,page='login',name='',owner=false,setup=false,cache,selected,hideTimer;
+let offline=false,hasAccount=false,locked=false,previewUrl=null,registrationSent=false;
 function rpc(op,data={}){
   if(offline && ['home','subject','source','addSource'].includes(op))return offlineData(op,data);
   const id=++serial;
@@ -42,12 +42,12 @@ function form(title,fields,label,fn){
     catch(err){status.textContent=err.message;}finally{submit.disabled=false;}};
   return f;
 }
-const links=()=>[['home',owner?'لوحة الصف':'المواد'],['feed','الإشعارات'],['feedback','الاقتراحات'],...(owner?[['accounts','الطلاب']]:[]),['settings','الإعدادات']];
+const links=()=>[['home',owner?'لوحة الصف':'المواد'],...(owner?[['feed','الإشعارات'],['feedback','الاقتراحات'],['accounts','الطلاب']]:[]),['settings','الإعدادات']];
 function navigation(){
-  menu.hidden=!(name||offline);
+  menu.hidden=!name||(!owner&&locked);
   document.body.dataset.role=owner?'owner':'student';
   $('#role').textContent=owner?'المالك':'الطالب';
-  const tabs=(name||offline)?links():[];
+  const tabs=!menu.hidden?links():[];
   drawer.querySelector('nav').replaceChildren(...tabs.map(([key,label])=>{
     const entry=button(label,()=>go(key,undefined,true),page===key?'current':'');
     if(page===key)entry.setAttribute('aria-current','page');
@@ -74,31 +74,28 @@ document.addEventListener('keydown',e=>{
   else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
 });
 async function boot(){
-  const state=await rpc('boot');owner=state.owner;paired=state.paired;setup=state.setup;
-  hasAccount=locked=state.locked;savedSession=state.savedSession;name=state.studentName||'';offline=!owner&&!name;
-  if(savedSession){
-    try{const account=await rpc('resume');name=account.name;offline=false;}
-    catch(err){
-      name='';offline=!owner;
-      if(err.message.includes('انتهت الجلسة'))savedSession=false;
-      else if(!owner)message('الاتصال بالصف غير متاح الآن. حسابك محفوظ ويمكنك عرض المواد دون تسجيل الدخول من جديد.');
-      else message(err.message);
-    }
-  }
-  await go(owner&&!name?'login':'home');
+  const state=await rpc('boot');
+  owner=state.owner;setup=state.setup;hasAccount=state.hasAccount;locked=state.locked;offline=!owner;
+  registrationSent=state.registrationSent;
+  if(owner&&state.savedSession){
+    try{name=(await rpc('resume')).name;}
+    catch(err){message(err.message);}
+  }else if(!owner)name=state.studentName||'';
+  await go(locked&&!owner?'unlock':owner&&!name?'login':'home');
 }
 async function go(next,item,focusPage=false){
   if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
   showDrawer(false);page=next;const mine=++revision;
   if(item&&next==='subject')selected=item;
   navigation();
-  const pages={unlock,login,home,feed,feedback,accounts,settings,subject,source,quiz,pair};
+  const pages={unlock,login,home,feed,feedback,accounts,settings,subject,source,quiz};
   try{
     if((name||offline)&&['home','feed','feedback','accounts','settings','subject'].includes(next))cache=await rpc('home');
     if(mine!==revision)return;
     const nodes=await pages[next](item);
     if(mine===revision){
       main.replaceChildren(...nodes.filter(Boolean));window.scrollTo(0,0);
+      if(next==='accounts')refreshRegistrations($('#registrations'));
       if(focusPage){
         const heading=main.querySelector('h1');
         heading.tabIndex=-1;heading.focus({preventScroll:true});
@@ -106,23 +103,28 @@ async function go(next,item,focusPage=false){
     }
   }catch(err){
     if(mine!==revision)return;
-    if(err.message.includes('انتهت الجلسة')){savedSession=false;name='';offline=!owner;await go(owner?'login':'home');return;}
-    main.replaceChildren(hero('تعذّر فتح الصفحة',err.message),button('إعادة المحاولة',()=>go(next,item)),button(owner?'العودة':'عرض المواد على الهاتف',()=>{if(!owner){offline=true;name='';}return go(owner&&!name?'login':'home');}));
+    if(err.message.includes('انتهت الجلسة')){name='';await go(owner?'login':'unlock');return;}
+    main.replaceChildren(hero('تعذّر فتح الصفحة',err.message),button('إعادة المحاولة',()=>go(next,item)),button('العودة',()=>go(owner&&!name?'login':!owner&&locked?'unlock':'home')));
   }
 }
-function pair(){return [hero('ربط الهاتف بالصف','الاتصال عبر شبكة الواي فاي المشتركة'),form('رمز الربط',[field('الصق الرمز الذي شاركه المالك','invite','textarea')],'ربط الصف',async d=>{const linked=await rpc('pair',d);paired=true;savedSession=linked.retained;
-    if(savedSession){
-      try{const account=await rpc('resume');name=account.name;offline=false;await go('home');return;}
-      catch(err){if(!err.message.includes('انتهت الجلسة'))throw err;savedSession=false;}
-    }
-    await go('login');}),button('العودة للمواد',()=>go('home'))];}
 function login(){
-  const first=owner&&setup;
-  return [hero(owner?'لوحة قوم دروس':'قوم دروس',owner?'إدارة الصف':'مساحة الطالب'),form(first?'إنشاء حساب المالك':'تسجيل الدخول',[field('الاسم','name'),field(first?'كلمة السر · ٨ أحرف على الأقل':'كلمة السر','password','password')],first?'إنشاء اللوحة':'دخول',async d=>{
-    const result=await rpc(first?'setup':'login',d);name=result.name;offline=false;savedSession=true;setup=false;await go('home');
-  }),!owner&&button('تغيير رمز الصف',()=>go('pair')),!owner&&button('العودة للمواد',()=>go('home'))];
+  return [hero('لوحة قوم دروس','إدارة الصف'),form(setup?'إنشاء حساب المالك':'تسجيل الدخول',[field('الاسم','name'),field(setup?'كلمة السر · ٨ أحرف على الأقل':'كلمة السر','password','password')],setup?'إنشاء اللوحة':'دخول',async data=>{
+    name=(await rpc(setup?'setup':'login',data)).name;
+    setup=false;
+    await go('home');
+  })];
 }
-function unlock(){return [hero('مصادري المحفوظة','تسجيل الدخول إلى حساب الهاتف'),form('تسجيل الدخول',[field('الاسم','name'),field('كلمة السر','password','password')],'فتح مصادري',async d=>{await rpc('unlock',d);locked=false;await go(selected?'subject':'home',selected);})];}
+function unlock(){
+  return [hero('قوم دروس','حساب الطالب على هذا الهاتف'),
+    !hasAccount&&el('p','يظهر اسمك في لوحة المالك على شبكة الصف. تبقى كلمة السر على هاتفك.','empty-state'),
+    form(hasAccount?'تسجيل الدخول':'إنشاء حساب الطالب',[
+      field('الاسم','name','text',name),field('كلمة السر · ٦ أحرف على الأقل','password','password')
+    ],hasAccount?'دخول':'تسجيل',async data=>{
+      name=(await rpc(hasAccount?'unlock':'register',data)).name;
+      locked=false;hasAccount=true;
+      await go('home');
+    })];
+}
 const symbols=['ϟ','⚗','✿','Aa','∑'];
 const number=new Intl.NumberFormat('ar-SY');
 function home(){
@@ -139,10 +141,9 @@ function home(){
   };
   const search=el('input');search.type='search';search.placeholder='ابحث عن مادة';search.setAttribute('aria-label',search.placeholder);search.oninput=()=>render(search.value.trim());render('');
   const waiting=cache.feedback.filter(x=>!x.reply).length;
-  const active=owner?cache.students.filter(s=>Number(s.last_seen)>Date.now()-24*3600000).length:0;
-  return [hero(owner?'نظرة على الصف':'المواد الدراسية',owner?name+' · '+cache.students.length+' طلاب':(name?'صف '+name:'مكتبة الدروس')),
-    owner&&wrap('grid stat-grid',tile('الطلاب النشطون',number.format(active)+' خلال آخر ٢٤ ساعة','◉',()=>go('accounts')),tile('صندوق الاقتراحات',number.format(waiting)+' بانتظار الرد','✉',()=>go('feedback')),tile('إشعار جديد','إرسال إلى الصف','＋',()=>go('feed'))),
-    owner&&button('ربط هواتف الطلاب',()=>go('settings')),owner&&el('h2','المواد الدراسية','section-title'),search,grid,owner&&form('مادة جديدة',[field('اسم المادة','name')],'إضافة مادة',async d=>{await rpc('addSubject',d);await go('home');})];
+  return [hero(owner?'نظرة على الصف':'المواد الدراسية',owner?name:(name||'مكتبة الدروس')),
+    owner&&wrap('grid stat-grid',tile('تسجيلات الطلاب','عرض المسجلين','◉',()=>go('accounts')),tile('صندوق الاقتراحات',number.format(waiting)+' بانتظار الرد','✉',()=>go('feedback')),tile('إشعار جديد','إرسال إلى الصف','＋',()=>go('feed'))),
+    owner&&el('h2','المواد الدراسية','section-title'),search,grid,owner&&form('مادة جديدة',[field('اسم المادة','name')],'إضافة مادة',async d=>{await rpc('addSubject',d);await go('home');})];
 }
 function feed(){if(offline)return [hero('أخبار الصف والإشعارات','قوم دروس'),el('p','تظهر هنا الإعلانات التي ينشرها المالك بعد ربط حساب الصف.'),button('إعدادات الصف',()=>go('settings'))];return [hero('الإشعارات','أخبار الصف وتذكيراته'),owner&&form('إشعار عام',[field('العنوان','title'),field('نص الإشعار','body','textarea')],'نشر للطلاب',async d=>{await rpc('notice',d);await go('feed');}),
   ...cache.notices.map(n=>wrap('card',el('small',date(n.created)),el('h3',n.title),el('pre',n.body))),!cache.notices.length&&el('p','ستظهر أخبار الصف هنا عند نشرها.'),button('تحديث',()=>go('feed'))];}
@@ -150,16 +151,39 @@ const date=v=>new Intl.DateTimeFormat('ar-SY',{weekday:'long',month:'long',day:'
 function feedback(){if(offline)return [hero('اقتراحاتي','صندوق الطالب'),el('p','اربط حساب الصف لإرسال اقتراح وقراءة ردّ المالك.'),button('إعدادات الصف',()=>go('settings'))];return [hero(owner?'صندوق الاقتراحات':'اقتراحاتي',owner?'مراجعة رسائل الطلاب':'رسائلي وردود المالك'),!owner&&form('اقتراح جديد',[field('اكتب اقتراحك','body','textarea')],'إرسال للمالك',async d=>{await rpc('suggest',d);await go('feedback');}),
   ...cache.feedback.map(f=>wrap('card',el('small',f.name+' · '+date(f.created)),el('pre',f.body),el('b',f.reply?'رد المالك':'بانتظار الرد'),el('pre',f.reply||''),...(owner?[form('الرد',[field('نص الرد','body','textarea',f.reply||'')],'حفظ الرد',async d=>{await rpc('reply',{...d,id:f.id});await go('feedback');})]:[]))),button('تحديث',()=>go('feedback'))];}
 const dateTime=v=>new Intl.DateTimeFormat('ar-SY',{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}).format(v);
-function accounts(){return [hero('طلاب الصف',cache.students.length+' حسابات'),form('حساب طالب جديد',[field('اسم الطالب','name'),field('كلمة السر · ٨ أحرف على الأقل','password','password')],'إنشاء الحساب',async d=>{await rpc('account',d);await go('accounts');}),...cache.students.map(a=>wrap('card',el('strong',a.name),el('small',a.last_seen?'آخر نشاط: '+dateTime(a.last_seen):'لم يسجّل الدخول بعد'),el('p','مصادر أضافها: '+a.sources+' · اختبارات أجاب عنها: '+a.quizzes+' · اقتراحات: '+a.suggestions)))];}
+function updateRegistrationList(container, data){
+  container.replaceChildren(el('small',number.format(data.total)+' تسجيل'),
+    ...data.entries.map(entry=>wrap('card',el('strong',entry.name),el('small','تم التسجيل · '+dateTime(entry.created)))),
+    ...(!data.entries.length?[el('p','تظهر أسماء الطلاب هنا عند التسجيل على شبكة الواي فاي نفسها.','empty-state')]:[]));
+}
+async function refreshRegistrations(container){
+  try{const data=await rpc('registrations');if(container.isConnected)updateRegistrationList(container,data);}
+  catch(err){message(err.message);}
+}
+window.registrationArrived=name=>{
+  message('تم التسجيل · '+name);
+  const container=$('#registrations');
+  if(container)refreshRegistrations(container);
+};
+window.registrationDelivered=()=>{
+  registrationSent=true;
+  const status=$('#registration-status');
+  if(status)status.textContent='أُبلغت لوحة المالك بالتسجيل.';
+};
+async function accounts(){
+  const list=wrap('registration-list');list.id='registrations';
+  return [hero('الطلاب','التسجيلات المحلية'),list,
+    cache.students.length>0&&el('h2','حسابات الصف السابقة'),
+    ...cache.students.map(entry=>wrap('card',el('strong',entry.name),
+      el('small',entry.last_seen?'آخر نشاط: '+dateTime(entry.last_seen):'لم يسجّل الدخول بعد'),
+      el('p','مصادر أضافها: '+entry.sources+' · اختبارات أجاب عنها: '+entry.quizzes+' · اقتراحات: '+entry.suggestions)))];
+}
 function settings(){
-  const code=el('pre');
-  return [hero('الإعدادات',name||'قوم دروس'),offline&&button(paired?(savedSession?'الاتصال بالصف':'تسجيل الدخول إلى الصف'):'ربط حساب الصف',async()=>{
-      if(!paired)return go('pair');
-      if(!savedSession)return go('login');
-      try{const account=await rpc('resume');name=account.name;offline=false;await go('home');}
-      catch(err){if(err.message.includes('انتهت الجلسة')){savedSession=false;return go('login');}throw err;}
-    }),offline&&button('ملاحظاتي السابقة',()=>rpc('notes')),locked&&offline&&button('فتح مصادري المحفوظة',()=>go('unlock')),owner&&wrap('card',el('h2','ربط هواتف الطلاب'),el('p','اتصلوا بنفس شبكة الواي فاي. اترك لوحة المالك مفتوحة أثناء استخدام الصف.'),
-    button('تشغيل الصف ومشاركة الرمز',async()=>{const invite=(await rpc('share')).invite;code.textContent=(invite.startsWith('qum1/127.')?'رمز للتجربة على نفس الهاتف فقط. لمشاركة الصف مع الطلاب اتصل بالواي فاي ثم أعِد المشاركة.\n':'')+invite;code.style.userSelect='all';},'primary'),code),
+  const status=el('p',registrationSent?'أُبلغت لوحة المالك بالتسجيل.':'سيُرسل إشعار التسجيل تلقائيًا عند الاتصال بشبكة لوحة المالك.');
+  status.id='registration-status';
+  return [hero('الإعدادات',name||'قوم دروس'),
+    offline&&wrap('card',el('h2','الحساب المحلي'),status),
+    offline&&button('ملاحظاتي السابقة',()=>rpc('notes')),
     owner&&wrap('card',el('h2','النسخ الاحتياطي المشفّر'),
       el('p','احفظ نسخة من الطلاب والمصادر والاختبارات والإشعارات والمقترحات خارج الهاتف. لا تفقد كلمة مرور النسخة؛ فهي مطلوبة عند الاستعادة.'),
       form('حفظ نسخة احتياطية',[field('كلمة مرور للنسخة · ١٢ حرفًا على الأقل','password','password')],'اختيار مكان الحفظ',async d=>{
@@ -170,8 +194,8 @@ function settings(){
         await rpc('restore',{password:d.password});message('اختر ملف النسخة لاستعادة البيانات.');
       })
     ),
-    offline&&hasAccount&&!locked&&button('تسجيل الخروج',async()=>{await rpc('lock');locked=true;await go('home');}),
-    !offline&&button('تسجيل الخروج',async()=>{await rpc('logout');savedSession=false;name='';offline=!owner;await go(owner?'login':'home');})];
+    offline&&hasAccount&&!locked&&button('تسجيل الخروج',async()=>{await rpc('lock');locked=true;await go('unlock');}),
+    !offline&&button('تسجيل الخروج',async()=>{await rpc('logout');name='';await go('login');})];
 }
 function ocr(bytes){
   const worker=new Worker('ocr-worker.js');
@@ -215,5 +239,5 @@ async function source(item){const record=await rpc('source',{id:item.id});const 
   return [button('العودة للمادة',()=>go('subject',selected)),hero(record.title,date(record.created)+(owner&&record.added_by?' · أضافه '+record.added_by:'')),wrap('card',el('pre',record.body),img),owner&&button('حذف المصدر',async()=>{if(confirm('حذف هذا المصدر من الصف؟')){await rpc('remove',{id:item.id});await go('subject',selected);}})];}
 async function quiz(item){const q=await rpc('quiz',{id:item.id}),choices=JSON.parse(q.choices),result=el('p');
   return [hero(q.title,selected.name),wrap('card',el('h3',q.question),...choices.map((v,i)=>button(v,async()=>{if(owner){message('معاينة المالك');return;}const score=await rpc('solve',{id:item.id,choice:i});result.textContent=i===score.answer?'إجابة صحيحة':'الإجابة الصحيحة · '+choices[score.answer];})),result),button('العودة للمادة',()=>go('subject',selected))];}
-window.backPage=()=>{if(!drawer.hidden){showDrawer(false,true);return true;}if(page==='source'||page==='quiz'){go('subject',selected);return true;}if(!owner&&(page==='pair'||page==='login')){go('home');return true;}if((name||offline)&&page!=='home'){go('home');return true;}return false;};
+window.backPage=()=>{if(!drawer.hidden){showDrawer(false,true);return true;}if(page==='source'||page==='quiz'){go('subject',selected);return true;}if(!owner&&locked)return false;if((name||offline)&&page!=='home'){go('home');return true;}return false;};
 boot().catch(e=>message(e.message));

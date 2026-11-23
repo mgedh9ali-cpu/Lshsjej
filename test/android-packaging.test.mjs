@@ -16,8 +16,8 @@ test('ships separate student and owner launchers without the hosted web app', ()
     const source = read('android/' + manifest);
     assert.ok(source.includes('package="' + id + '"'));
     assert.ok(source.includes('android:name="' + activity + '"'));
-    assert.match(source, /android:versionCode="13"/);
-    assert.match(source, /android:versionName="0\.7\.0"/);
+    assert.match(source, /android:versionCode="14"/);
+    assert.match(source, /android:versionName="0\.7\.1"/);
     assert.match(source, /android:usesCleartextTraffic="false"/);
     assert.doesNotMatch(source, /android.intent.category.BROWSABLE/);
   }
@@ -26,6 +26,16 @@ test('ships separate student and owner launchers without the hosted web app', ()
   }
   assert.doesNotMatch(read('android/build.sh'), /student-origin\.txt|web\/fonts/);
   assert.doesNotMatch(read('android/src/school/dafaa/MainActivity.java'), /openStudentApp|httpsOrigin/);
+});
+
+test('student registration is local and only the registration notice is sent to the owner', () => {
+  const interfaceCode = read('android/room/room.js');
+  assert.doesNotMatch(interfaceCode, /go\('pair'\)|رمز الربط|مشاركة الرمز/);
+  assert.match(interfaceCode, /rpc\(hasAccount\?'unlock':'register',data\)/);
+  assert.match(interfaceCode, /تم التسجيل · /);
+  const registration = read('android/src/school/dafaa/LocalRegistration.java');
+  assert.match(registration, /RoomStore\.obj\("op", "registerLocal", "id", id, "name", name\)/);
+  assert.doesNotMatch(registration, /password|verifier|salt/);
 });
 
 test('the packaged offline catalog contains valid Arabic subject data', () => {

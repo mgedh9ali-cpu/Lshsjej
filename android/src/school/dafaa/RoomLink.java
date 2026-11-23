@@ -19,7 +19,13 @@ final class RoomLink {
     private final ThreadPoolExecutor pool=new ThreadPoolExecutor(4,4,0,TimeUnit.SECONDS,new ArrayBlockingQueue<Runnable>(16));
     private String fingerprint;
     private final RoomStore store;
-    RoomLink(RoomStore store){this.store=store;}
+    interface RegistrationListener { void received(String name); }
+    private final RegistrationListener registrationReceived;
+    RoomLink(RoomStore store, RegistrationListener registrationReceived){
+        this.store=store;
+        this.registrationReceived=registrationReceived;
+    }
+    String fingerprint(){return fingerprint;}
     static String fingerprint(X509Certificate cert)throws Exception{
         byte[] digest=MessageDigest.getInstance("SHA-256").digest(cert.getEncoded());
         StringBuilder out=new StringBuilder();for(byte b:digest)out.append(String.format(Locale.US,"%02x",b&255));return out.toString();
@@ -61,23 +67,15 @@ final class RoomLink {
         },"class-listener").start();
     }
     synchronized void close(){try{if(server!=null)server.close();}catch(Exception ignored){}pool.shutdownNow();}
-    String invitation()throws Exception{
-        Enumeration<NetworkInterface> adapters=NetworkInterface.getNetworkInterfaces();
-        while(adapters.hasMoreElements()){
-            NetworkInterface nic=adapters.nextElement();
-            if(!nic.isUp()||nic.isLoopback())continue;
-            Enumeration<InetAddress> hosts=nic.getInetAddresses();
-            while(hosts.hasMoreElements()){
-                InetAddress ip=hosts.nextElement();
-                if(ip instanceof Inet4Address&&ip.isSiteLocalAddress())return "qum1/"+ip.getHostAddress()+"/"+fingerprint;
-            }
-        }
-        return "qum1/127.0.0.1/"+fingerprint;
-    }
     private void serve(Socket socket){
         try(Socket s=socket){
             JSONObject req=receive(s);JSONObject result;
-            try{result=RoomStore.obj("value",store.handle(false,s.getInetAddress().getHostAddress(),req));}
+            try{
+                Object value=store.handle(false,s.getInetAddress().getHostAddress(),req);
+                result=RoomStore.obj("value",value);
+                if("registerLocal".equals(req.optString("op")) && ((JSONObject)value).optBoolean("new"))
+                    registrationReceived.received(req.getString("name").trim());
+            }
             catch(Exception e){result=RoomStore.obj("error",safe(e));}
             send(s,result);
         }catch(Exception ignored){}
@@ -92,22 +90,19 @@ final class RoomLink {
         if(n<2||n>LIMIT)throw new IOException("طلب غير صالح.");
         byte[] bytes=new byte[n];in.readFully(bytes);return new JSONObject(new String(bytes,"UTF-8"));
     }
-    static JSONObject call(String invite,JSONObject req)throws Exception{
-        String[] parts=invite.trim().split("/");
-        if(parts.length!=3||!parts[0].equals("qum1")||!parts[1].matches("[0-9]{1,3}(\\.[0-9]{1,3}){3}")||!parts[2].matches("[a-f0-9]{64}"))throw new Exception("الصق رمز الربط الكامل من المالك.");
-        InetAddress host=InetAddress.getByName(parts[1]);
-        if(!host.isSiteLocalAddress()&&!host.isLoopbackAddress())throw new Exception("استخدم شبكة الصف المحلية.");
+    static JSONObject call(InetAddress host,String expectedFingerprint,JSONObject req)throws Exception{
+        if(!host.isSiteLocalAddress()&&!host.isLinkLocalAddress())throw new Exception("استخدم شبكة الصف المحلية.");
         X509TrustManager trust=new X509TrustManager(){
             public X509Certificate[] getAcceptedIssuers(){return new X509Certificate[0];}
             public void checkClientTrusted(X509Certificate[] c,String t)throws java.security.cert.CertificateException{throw new java.security.cert.CertificateException();}
             public void checkServerTrusted(X509Certificate[] c,String t)throws java.security.cert.CertificateException{
-                try{if(c.length>0&&parts[2].equals(fingerprint(c[0]))){c[0].checkValidity();return;}}catch(Exception ignored){}
+                try{if(c.length>0&&expectedFingerprint.equals(fingerprint(c[0]))){c[0].checkValidity();return;}}catch(Exception ignored){}
                 throw new java.security.cert.CertificateException("Class identity mismatch");
             }};
         SSLContext ctx=SSLContext.getInstance("TLS");ctx.init(null,new TrustManager[]{trust},null);
         try(SSLSocket socket=(SSLSocket)ctx.getSocketFactory().createSocket()){
             socket.connect(new InetSocketAddress(host,PORT),4000);socket.setSoTimeout(12000);socket.startHandshake();
             send(socket,req);return receive(socket);
-        }catch(IOException e){throw new Exception("تعذّر الوصول لهاتف المالك. تحقق من شبكة الواي فاي ورمز الربط وفتح لوحة المالك.");}
+        }catch(IOException e){throw new Exception("تعذّر الوصول لهاتف المالك عبر الشبكة المحلية.");}
     }
 }

@@ -33,6 +33,7 @@ final class RoomStore {
         db.execSQL("CREATE TABLE IF NOT EXISTS sources(id INTEGER PRIMARY KEY,subject INTEGER,title TEXT,topic TEXT,body TEXT,image TEXT,created INTEGER,UNIQUE(subject,topic))");
         db.execSQL("CREATE TABLE IF NOT EXISTS quizzes(id INTEGER PRIMARY KEY,subject INTEGER,title TEXT,question TEXT,choices TEXT,answer INTEGER,published INTEGER DEFAULT 0)");
         db.execSQL("CREATE TABLE IF NOT EXISTS results(id INTEGER PRIMARY KEY,quiz INTEGER,name TEXT,choice INTEGER,correct INTEGER,created INTEGER)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS local_registrations(id TEXT PRIMARY KEY,name TEXT NOT NULL,created INTEGER NOT NULL)");
         // Keep existing classroom databases intact while enabling activity and source attribution.
         if(!hasColumn("accounts","last_seen"))db.execSQL("ALTER TABLE accounts ADD COLUMN last_seen INTEGER");
         if(!hasColumn("sources","added_by"))db.execSQL("ALTER TABLE sources ADD COLUMN added_by TEXT");
@@ -163,6 +164,12 @@ final class RoomStore {
         db.execSQL("INSERT INTO accounts(name,salt,verifier,owner) VALUES(?,?,?,?)",new Object[]{name,salt,Base64.encodeToString(hash(pass,salt),Base64.NO_WRAP),owner?1:0});
     }
     private void rate(String key,int max,long period)throws Exception{
+        if(attempts.size()>=1024){
+            long now=System.currentTimeMillis();
+            Iterator<long[]> values=attempts.values().iterator();
+            while(values.hasNext())if(values.next()[0]<=now)values.remove();
+            if(attempts.size()>=1024&&!attempts.containsKey(key))throw new Exception("محاولات كثيرة. انتظر قليلًا.");
+        }
         long now=System.currentTimeMillis();long[] a=attempts.get(key);
         if(a==null||a[0]<=now){a=new long[]{now+period,0};attempts.put(key,a);}
         if(++a[1]>max)throw new Exception("محاولات كثيرة. انتظر قليلًا.");
@@ -171,6 +178,17 @@ final class RoomStore {
         String op=check(p,"op",40);
         boolean first=rows("SELECT 1 FROM accounts WHERE owner=1").length()==0;
         if(op.equals("status"))return obj("setup",owner&&first);
+        if(op.equals("registerLocal")){
+            if(owner||first)throw new Exception("لوحة المالك غير جاهزة لاستقبال التسجيل.");
+            rate("register-local",60,60000);
+            rate("register-local:"+peer,10,60000);
+            String id=check(p,"id",40),name=check(p,"name",100);
+            if(!id.matches("[A-Za-z0-9_-]{24}")||name.matches("(?s).*\\p{Cntrl}.*"))throw new Exception("بيانات التسجيل غير صالحة.");
+            if(rows("SELECT 1 FROM local_registrations WHERE id=?",id).length()>0)return obj("registered",true);
+            if(rows("SELECT 1 FROM local_registrations LIMIT 1 OFFSET 9999").length()>0)throw new Exception("قائمة التسجيلات ممتلئة.");
+            db.execSQL("INSERT INTO local_registrations(id,name,created) VALUES(?,?,?)",new Object[]{id,name,System.currentTimeMillis()});
+            return obj("registered",true,"new",true);
+        }
         if(op.equals("setup")){
             if(!owner||!first)throw new Exception("العملية للمالك.");
             account(p,true);op="login";
@@ -200,6 +218,10 @@ final class RoomStore {
         db.execSQL("UPDATE accounts SET last_seen=? WHERE name=?",new Object[]{System.currentTimeMillis(),name});
         String id=String.valueOf(p.optInt("id")),sub=String.valueOf(p.optInt("subject"));
         switch(op){
+        case "registrations":
+            if(!owner)throw new Exception("العملية للمالك.");
+            return obj("entries",rows("SELECT name,created FROM local_registrations ORDER BY created DESC,rowid DESC LIMIT 200"),
+                "total",rows("SELECT COUNT(*) AS total FROM local_registrations").getJSONObject(0).getLong("total"));
         case "resume":return obj("name",name);
         case "logout":db.execSQL("DELETE FROM sessions WHERE token_hash=? AND owner=?",new Object[]{digest,owner?1:0});return obj();
         case "home":return obj("subjects",rows("SELECT s.*, (SELECT count(*) FROM sources d WHERE d.subject=s.id) AS docs FROM subjects s ORDER BY s.id"),"notices",rows("SELECT * FROM posts ORDER BY id DESC LIMIT 80"),"feedback",owner?rows("SELECT * FROM feedback ORDER BY id DESC LIMIT 200"):rows("SELECT * FROM feedback WHERE name=? ORDER BY id DESC LIMIT 200",name),"students",owner?rows("SELECT a.name,a.last_seen,"+

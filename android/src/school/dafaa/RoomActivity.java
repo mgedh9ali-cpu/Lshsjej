@@ -11,7 +11,6 @@ import org.json.*;
 
 public final class RoomActivity extends Activity {
     private String base;
-    private boolean unlocked;
     private final ExecutorService tasks=Executors.newSingleThreadExecutor();
     private RoomStore store;
     private RoomLink link;
@@ -20,7 +19,11 @@ public final class RoomActivity extends Activity {
     private volatile boolean sharing;
     private ValueCallback<Uri[]> picker;
     private String token="";
-    private String remote;
+    private LocalRegistration registration;
+    private final ExecutorService registrationTask=Executors.newSingleThreadExecutor();
+    private final java.util.concurrent.atomic.AtomicBoolean registrationInFlight=new java.util.concurrent.atomic.AtomicBoolean();
+    private final android.os.Handler registrationTimer=new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable retryRegistration=this::deliverRegistration;
     private String backupPassword;
     private String restorePassword;
     @Override public void onCreate(Bundle saved){
@@ -28,10 +31,10 @@ public final class RoomActivity extends Activity {
         if(android.os.Build.VERSION.SDK_INT>=30)getWindow().setDecorFitsSystemWindows(false);
         owner="school.dafaa.owner".equals(getPackageName());
         base=owner?"https://room.invalid/":"https://classroom.invalid/";
-        if(owner){store=new RoomStore(this);link=new RoomLink(store);}
+        registration=new LocalRegistration(this);
+        if(owner){store=new RoomStore(this);link=new RoomLink(store,this::registrationArrived);}
         token=getPreferences(MODE_PRIVATE).getString(owner?"ownerToken":"studentToken","");
-        unlocked=getSharedPreferences("offline_student",MODE_PRIVATE).getBoolean("remembered",false);
-        remote=getPreferences(MODE_PRIVATE).getString("invite","");
+
         web=new WebView(this);web.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         android.widget.FrameLayout frame=new android.widget.FrameLayout(this);
         int background=0xfff6f8fb;
@@ -64,15 +67,80 @@ public final class RoomActivity extends Activity {
                 catch(ActivityNotFoundException e){picker=null;cb.onReceiveValue(null);}return true;
             }});
         web.addJavascriptInterface(new Bridge(),"Classroom");web.loadUrl(base+"room.html");
-        if(owner)tasks.execute(()->{
-            try{
-                link.start();sharing=true;
-                runOnUiThread(()->getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
-            }catch(Exception problem){
-                runOnUiThread(()->noticeBackup(false,"تعذّر تشغيل مشاركة الصف. افتح الإعدادات وأعد المحاولة."));
-            }
+        if(owner&&!token.isEmpty())tasks.execute(this::startRegistrationService);
+        if(!owner)registrationTimer.post(retryRegistration);
+    }
+
+    private void registrationArrived(String name){
+        runOnUiThread(()->{
+            if(!isFinishing()&&!isDestroyed())web.evaluateJavascript("if(window.registrationArrived)window.registrationArrived("+JSONObject.quote(name)+")",null);
         });
     }
+
+    private void startRegistrationService(){
+        try{
+            store.handle(true,"device",RoomStore.obj("op","resume","token",token));
+            link.start();
+            registration.advertise(link.fingerprint());
+            sharing=true;
+            runOnUiThread(()->getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
+        }catch(Exception problem){
+            runOnUiThread(()->noticeBackup(false,"تعذّر تشغيل استقبال تسجيلات الطلاب."));
+        }
+    }
+
+    private SharedPreferences localData(){return getSharedPreferences("offline_student",MODE_PRIVATE);}
+
+    private void deliverRegistration(){
+        if(isFinishing()||isDestroyed())return;
+        SharedPreferences local=localData();
+        if(!local.contains("hash")||local.getBoolean("registrationSent",false)||!registrationInFlight.compareAndSet(false,true))return;
+        registrationTask.execute(()->{
+            try{
+                String id=local.getString("registrationId","");
+                if(id.isEmpty()){
+                    id=RoomStore.random(18);
+                    if(!local.edit().putString("registrationId",id).commit())throw new IllegalStateException();
+                }
+                String pin=registration.send(id,local.getString("name",""),local.getString("registeredOwner",""));
+                if(pin!=null&&local.edit().putString("registeredOwner",pin).putBoolean("registrationSent",true).commit()){
+                    runOnUiThread(()->{
+                        if(!isFinishing()&&!isDestroyed())web.evaluateJavascript("if(window.registrationDelivered)window.registrationDelivered()",null);
+                    });
+                }
+            }catch(Exception ignored){}
+            registrationInFlight.set(false);
+            if(!registrationTask.isShutdown()&&!local.getBoolean("registrationSent",false))
+                registrationTimer.postDelayed(retryRegistration,8000);
+        });
+    }
+
+    private Object studentAccount(String op,JSONObject p)throws Exception{
+        SharedPreferences local=localData();
+        String name=RoomStore.check(p,"name",100);
+        String password=p.optString("password","");
+        if(password.length()<6||password.length()>128)throw new Exception("اكتب كلمة سر من 6 إلى 128 حرفًا.");
+        SharedPreferences.Editor edit=local.edit();
+        if(op.equals("register")){
+            if(local.contains("hash"))throw new Exception("يوجد حساب محلي على هذا الهاتف بالفعل.");
+            if(name.matches("(?s).*\\p{Cntrl}.*"))throw new Exception("الاسم غير صالح.");
+            byte[] salt=new byte[16];
+            new java.security.SecureRandom().nextBytes(salt);
+            edit.putString("name",name).putString("salt",android.util.Base64.encodeToString(salt,2))
+                .putString("hash",android.util.Base64.encodeToString(MainActivity.localHash(password.toCharArray(),salt),2));
+        }else{
+            byte[] salt=android.util.Base64.decode(local.getString("salt",""),0);
+            byte[] digest=android.util.Base64.decode(local.getString("hash",""),0);
+            if(!local.contains("hash")||!local.getString("name","").equals(name)||
+                !java.security.MessageDigest.isEqual(digest,MainActivity.localHash(password.toCharArray(),salt)))
+                throw new Exception("الاسم أو كلمة السر غير صحيحة.");
+        }
+        if(!edit.putBoolean("remembered",true).commit())throw new Exception("تعذّر حفظ الحساب على الهاتف.");
+        registrationTimer.removeCallbacks(retryRegistration);
+        registrationTimer.post(retryRegistration);
+        return RoomStore.obj("name",name);
+    }
+
     public final class Bridge{
         @JavascriptInterface public void request(int id,String raw){
             tasks.execute(()->{
@@ -80,30 +148,21 @@ public final class RoomActivity extends Activity {
                 try{
                     JSONObject p=new JSONObject(raw);String op=p.getString("op");
                     Object value;
-                    if(op.equals("boot"))value=RoomStore.obj("owner",owner,"studentName",token.isEmpty()?"":getPreferences(MODE_PRIVATE).getString(owner?"ownerName":"studentName",""),"savedSession",!token.isEmpty(),"locked",!unlocked&&getSharedPreferences("offline_student",MODE_PRIVATE).contains("hash"),"paired",!remote.isEmpty(),"setup",owner&&((JSONObject)store.handle(true,"device",RoomStore.obj("op","status"))).optBoolean("setup"));
-                    else if(!owner&&op.equals("lock")){unlocked=false;getSharedPreferences("offline_student",MODE_PRIVATE).edit().putBoolean("remembered",false).apply();value=RoomStore.obj();}
-                    else if(!owner&&op.equals("unlock")){
-                        android.content.SharedPreferences old=getSharedPreferences("offline_student",MODE_PRIVATE);
-                        byte[] salt=android.util.Base64.decode(old.getString("salt",""),0);
-                        byte[] digest=android.util.Base64.decode(old.getString("hash",""),0);
-                        if(!java.security.MessageDigest.isEqual(digest,MainActivity.localHash(p.getString("password").toCharArray(),salt)) || !old.getString("name","").equals(p.getString("name")))throw new Exception("الاسم أو كلمة السر غير صحيحة.");
-                        unlocked=true;old.edit().putBoolean("remembered",true).apply();value=RoomStore.obj();
+                    if(op.equals("boot")){
+                        SharedPreferences local=localData();
+                        value=RoomStore.obj("owner",owner,"studentName",owner?"":local.getString("name",""),
+                            "savedSession",owner&&!token.isEmpty(),"hasAccount",!owner&&local.contains("hash"),
+                            "registrationSent",!owner&&local.getBoolean("registrationSent",false),
+                            "locked",!owner&&!local.getBoolean("remembered",false),
+                            "setup",owner&&((JSONObject)store.handle(true,"device",RoomStore.obj("op","status"))).optBoolean("setup"));
+                    }else if(!owner&&op.equals("lock")){
+                        localData().edit().putBoolean("remembered",false).apply();
+                        value=RoomStore.obj();
+                    }else if(!owner&&(op.equals("register")||op.equals("unlock"))){
+                        value=studentAccount(op,p);
                     }else if(!owner&&op.equals("notes")){
                         runOnUiThread(()->startActivity(new Intent(RoomActivity.this,MainActivity.class).putExtra("savedNotes",true)));
                         value=RoomStore.obj();
-                    }
-                    else if(!owner&&op.equals("pair")){
-                        String code=p.getString("invite").trim();
-                        JSONObject response=RoomLink.call(code,RoomStore.obj("op","status"));
-                        if(!response.has("value"))throw new Exception("تحقّق من رمز الصف.");
-                        getSharedPreferences("room_mode",MODE_PRIVATE).edit().putBoolean("prefer_offline",false).apply();
-                        String[] previous=remote.split("/"),current=code.split("/");
-                        boolean sameClass=previous.length==3&&current.length==3&&previous[2].equals(current[2]);
-                        remote=code;
-                        android.content.SharedPreferences.Editor editor=getPreferences(MODE_PRIVATE).edit().putString("invite",code);
-                        if(!sameClass){token="";editor.remove("studentToken").remove("studentName");}
-                        editor.apply();
-                        value=RoomStore.obj("retained",sameClass&&!token.isEmpty());
                     }else if(owner&&op.equals("backup")){
                         backupPassword=RoomStore.check(p,"password",200);
                         if(backupPassword.length()<12)throw new Exception("اختر كلمة مرور للنسخة من 12 حرفًا على الأقل.");
@@ -127,24 +186,18 @@ public final class RoomActivity extends Activity {
                             catch(Exception e){restorePassword=null;noticeBackup(false,"تعذّر فتح نافذة اختيار النسخة.");}
                         });
                         value=RoomStore.obj("started",true);
-                    }else if(owner&&op.equals("share")){
-                        store.handle(true,"device",RoomStore.obj("op","home","token",token));
-                        link.start();String code=link.invitation();sharing=true;
-                        runOnUiThread(()->{getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-                            if(!code.startsWith("qum1/127."))startActivity(Intent.createChooser(new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT,code),"إرسال رمز الصف"));});
-                        value=RoomStore.obj("invite",code);
-                    }else if(op.equals("local")&&!owner){getSharedPreferences("room_mode",MODE_PRIVATE).edit().putBoolean("prefer_offline",true).apply();runOnUiThread(()->finish());value=RoomStore.obj();}
-                    else{
+                    }else{
+                        if(!owner)throw new Exception("العملية للمالك.");
                         p.put("token",token);
-                        if(owner)value=store.handle(true,"device",p);
-                        else{JSONObject response=RoomLink.call(remote,p);if(response.has("error")){String error=response.getString("error");if(error.contains("انتهت الجلسة")){token="";getPreferences(MODE_PRIVATE).edit().remove("studentToken").remove("studentName").apply();}throw new Exception(error);}value=response.get("value");}
+                        value=store.handle(true,"device",p);
                         if(op.equals("login")||op.equals("setup")){
                             token=((JSONObject)value).getString("token");
                             getPreferences(MODE_PRIVATE).edit().putString(owner?"ownerToken":"studentToken",token).putString(owner?"ownerName":"studentName",((JSONObject)value).getString("name")).apply();((JSONObject)value).remove("token");
+                            startRegistrationService();
                         }else if(op.equals("logout")){
                             token="";
                             getPreferences(MODE_PRIVATE).edit().remove(owner?"ownerToken":"studentToken").remove(owner?"ownerName":"studentName").apply();
-                            if(owner&&sharing){link.close();link=new RoomLink(store);sharing=false;runOnUiThread(()->getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));}
+                            if(owner&&sharing){registration.close();link.close();link=new RoomLink(store,this::registrationArrived);sharing=false;runOnUiThread(()->getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));}
                         }
                     }
                     result=RoomStore.obj("value",value);
@@ -203,5 +256,5 @@ public final class RoomActivity extends Activity {
         });
     }
     @Override public void onBackPressed(){web.evaluateJavascript("window.backPage ? backPage() : false",v->{if("false".equals(v))super.onBackPressed();});}
-    @Override protected void onDestroy(){if(link!=null)link.close();tasks.shutdownNow();if(picker!=null)picker.onReceiveValue(null);web.removeJavascriptInterface("Classroom");web.destroy();super.onDestroy();}
+    @Override protected void onDestroy(){registrationTimer.removeCallbacks(retryRegistration);registrationTask.shutdownNow();registration.close();if(link!=null)link.close();tasks.shutdownNow();if(picker!=null)picker.onReceiveValue(null);web.removeJavascriptInterface("Classroom");web.destroy();super.onDestroy();}
 }

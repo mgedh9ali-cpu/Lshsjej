@@ -270,6 +270,7 @@ form p[role="status"]:empty { display: none; }
 pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; margin: 0; }
 img { display: block; max-width: 100%; height: auto; border-radius: 12px; }
 .legacy-sources { display: grid; gap: 8px; }
+.registration-list { display: grid; gap: 8px; }
 .legacy-sources article {
   padding: 12px;
   background: var(--surface);

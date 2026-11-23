@@ -336,7 +336,7 @@ public final class MainActivity extends Activity {
         add(options,text(name,20,INK,true),0);
         section(options,"ملاحظاتي المحفوظة",w -> showLocalNotes(name,0));
         section(options,"الصف على شبكة الواي فاي",w -> openClassroom());
-        section(options,"تسجيل الخروج",w -> {localData().edit().putBoolean("remembered",false).apply();setup();});
+        section(options,"تسجيل الخروج",w -> {localData().edit().putBoolean("remembered",false).apply();setup("");});
     }
 
     private void openSources(String name, String subject) {
