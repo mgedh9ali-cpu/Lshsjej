@@ -14,6 +14,7 @@ window.complete=(id,raw)=>{
   if(result.error)call.reject(Error(result.error));else call.resolve(result.value);
 };
 function message(value){$('#message').hidden=false;$('#message').textContent=value;clearTimeout(hideTimer);hideTimer=setTimeout(()=>$('#message').hidden=true,6500);}
+window.backupComplete=(success,description)=>message((success?'✓ ':'')+description);
 function el(tag,text='',cls=''){const n=document.createElement(tag);n.className=cls;n.textContent=text;return n;}
 function wrap(cls,...items){const n=el('div','',cls);n.append(...items);return n;}
 function button(label,action,cls=''){
@@ -116,6 +117,16 @@ function settings(){
       catch(err){if(err.message.includes('انتهت الجلسة')){savedSession=false;return go('login');}throw err;}
     }),offline&&button('ملاحظاتي السابقة',()=>rpc('notes')),locked&&offline&&button('فتح مصادري المحفوظة',()=>go('unlock')),owner&&wrap('card',el('h2','ربط هواتف الطلاب'),el('p','اتصلوا بنفس شبكة الواي فاي. اترك لوحة المالك مفتوحة أثناء استخدام الصف.'),
     button('تشغيل الصف ومشاركة الرمز',async()=>{const invite=(await rpc('share')).invite;code.textContent=(invite.startsWith('qum1/127.')?'رمز للتجربة على نفس الهاتف فقط. لمشاركة الصف مع الطلاب اتصل بالواي فاي ثم أعِد المشاركة.\n':'')+invite;code.style.userSelect='all';},'primary'),code),
+    owner&&wrap('card',el('h2','النسخ الاحتياطي المشفّر'),
+      el('p','احفظ نسخة من الطلاب والمصادر والاختبارات والإشعارات والمقترحات خارج الهاتف. لا تفقد كلمة مرور النسخة؛ فهي مطلوبة عند الاستعادة.'),
+      form('حفظ نسخة احتياطية',[field('كلمة مرور للنسخة · ١٢ حرفًا على الأقل','password','password')],'اختيار مكان الحفظ',async d=>{
+        await rpc('backup',{password:d.password});message('اختر مكان حفظ ملف النسخة المشفّرة.');
+      }),
+      form('استعادة نسخة احتياطية',[field('كلمة مرور النسخة السابقة','password','password')],'اختيار ملف للاستعادة',async d=>{
+        if(!confirm('سيُستبدل محتوى لوحة المالك بالبيانات الموجودة في النسخة. هل تريد المتابعة؟'))return;
+        await rpc('restore',{password:d.password});message('اختر ملف النسخة لاستعادة البيانات.');
+      })
+    ),
     offline&&hasAccount&&!locked&&button('تسجيل الخروج',async()=>{await rpc('lock');locked=true;await go('home');}),
     !offline&&button('تسجيل الخروج',async()=>{await rpc('logout');savedSession=false;name='';offline=!owner;await go(owner?'login':'home');})];
 }
