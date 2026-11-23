@@ -31,7 +31,7 @@ function subjectPage(subject, tab = 'documents') {
     const query = '?subject=' + subject.id;
     const [items, notices] = await Promise.all([api((tab === 'documents' ? '/archive' : '/quizzes') + query), api('/notices')]);
     const controls = el('div', { class: 'actions', role: 'group', 'aria-label': 'أقسام المادة' },
-      button('المستندات', subjectPage(subject), 'secondary', { 'aria-pressed': String(tab === 'documents') }),
+      button('المصادر', subjectPage(subject), 'secondary', { 'aria-pressed': String(tab === 'documents') }),
       button('الاختبارات', subjectPage(subject, 'quizzes'), 'secondary', { 'aria-pressed': String(tab === 'quizzes') }));
     const content = [button('← المواد', home), heading(subject.name), controls];
     if (tab === 'quizzes') {
@@ -64,7 +64,7 @@ function subjectPage(subject, tab = 'documents') {
       }
       refresh().catch(error => { submissionList.textContent = error.message; });
       const picker = el('input', { name: 'file', type: 'file', accept: 'image/jpeg,image/png,image/webp', required: true });
-      content.push(el('h2', {}, 'مساهماتي'), form([el('p', {}, 'ارفع ورقة دراسية بدون معلومات شخصية. تظهر الصورة للطلاب بعد قبول المساهمة.'), line('اختر صورة من جهازك · حتى 5 ميغابايت', picker)], 'رفع المساهمة', async (data, message, formElement) => {
+      content.splice(3, 0, form([el('h2', {}, 'إضافة مصدر'), el('p', {}, 'اختر صورة لصفحة الدرس. يقرأ النظام النص ويفحص تكراره داخل المادة.'), line('اختر صورة من جهازك · حتى 5 ميغابايت', picker)], 'رفع الصورة واستخراج النص', async (data, message, formElement) => {
         const image = await imageFile(data.file);
         const submission = await api('/submissions', { subject: subject.id, image });
         if (submission.state === 'processing') wasProcessing = true;
@@ -98,13 +98,23 @@ const quizPage = (subject, id) => display(async () => {
         button('العودة للاختبارات', subjectPage(subject, 'quizzes')));
     })];
 });
-const suggestions = display(async () => [heading('اقتراحات'), form([
-  line('اقتراحك', el('textarea', { name: 'body', rows: 5, maxlength: 2000, required: true })),
-], 'إرسال للمالك', async (data, message, formElement) => {
-  await api('/suggestions', { body: data.body });
-  formElement.reset();
-  message.textContent = 'وصل اقتراحك إلى لوحة المالك.';
-})]);
+const suggestions = display(async () => {
+  const entries = await api('/my-suggestions');
+  return [heading('اقتراحاتي'), form([
+    line('اقتراح جديد', el('textarea', { name: 'body', rows: 3, maxlength: 2000, required: true })),
+  ], 'إرسال للمالك', async data => {
+    await api('/suggestions', { body: data.body });
+    await suggestions();
+  }), ...entries.map(item => el('article', { class: 'card' },
+    el('small', {}, date(item.created)), el('p', { class: 'prose' }, item.body),
+    el('strong', {}, item.reply ? 'رد المالك' : 'بانتظار المراجعة'), el('p', { class: 'prose' }, item.reply)))];
+});
+const notifications = display(async () => {
+  const [notices, entries] = await Promise.all([api('/notices'), api('/my-suggestions')]);
+  return [heading('الإشعارات'), ...entries.filter(item => item.reply).map(item =>
+    button('رد المالك على اقتراحك · ' + item.body, suggestions, 'card list-button')),
+    noticeList(notices.filter(item => !item.subject))];
+});
 const notes = user => display(async () => {
   const subjects = await api('/subjects');
   if (!subjects.length) return [heading('ملاحظاتي'), empty('ما في مواد بعد.')];
@@ -120,9 +130,9 @@ const notes = user => display(async () => {
   })];
 });
 function ready(user) {
-  nav.replaceChildren(el('span', { class: 'identity' }, user.name), logout());
+  nav.replaceChildren();
   if (user.temporary) { temporary(ready); return; }
-  nav.prepend(button('المواد', home), button('الأخبار والتحديثات', news), button('ملاحظاتي', notes(user)), button('اقتراحات', suggestions), button('نتائجي', results));
+  nav.prepend(button('المواد', home), button('الأخبار والتحديثات', news), button('الإشعارات', notifications), button('اقتراحاتي', suggestions), button('الإعدادات', display(async () => [heading('الإعدادات', user.name), button('نتائجي', results), button('ملاحظاتي المحفوظة', notes(user)), logout()])));
   home();
 }
 api('/me').then(ready).catch(error => error.status === 401 ? login('student', ready) : errorView(error));

@@ -174,10 +174,14 @@ const dashboard = show(async () => {
   const overview = owner() ? await api('/overview') : null;
   const drafts = overview?.drafts ?? (can('quizzes') ? (await api('/quizzes')).filter(item => !item.published).length : 0);
   const metric = (label, value) => card(el('strong', { class: 'metric-value' }, String(value)), el('p', {}, label));
+  const address = owner() ? (await (await fetch('/api-class-address')).json()).address : null;
   return [heading('لوحة الإدارة', 'أهلًا، ' + me.name),
+    address && card(el('h2', {}, 'رابط الطلاب'), el('a', {href: address}, address)),
     overview && el('div', { class: 'metrics' },
       metric('طلاب فعّالون', overview.students), metric('مستندات منشورة', overview.documents), metric('اختبارات بانتظار الاعتماد', drafts)),
     el('div', { class: 'grid shortcuts' },
+      owner() && button('اقتراحات الطلاب والردود', suggestionsPage, 'card subject'),
+      owner() && button('إشعار عام للصف', broadcast, 'card subject'),
       owner() && button('إضافة طالب', accountPage, 'card subject'),
       (can('notices') || can('publishNotices')) && button('الأخبار والتذكيرات', noticesPage, 'card subject'),
       can('quizzes') && button('مراجعة الاختبارات', quizzesPage, 'card subject')),
@@ -187,10 +191,23 @@ const dashboard = show(async () => {
       el('div', { class: 'metrics' }, metric('قيد المعالجة', overview.processing), metric('موضوعات مكررة', overview.duplicates), metric('تحتاج إعادة رفع', overview.needsRetry))),
   ].filter(Boolean);
 });
+const broadcast = show(async () => [heading('إشعار عام للصف'), form([
+  line('العنوان', input('title', { required: true })),
+  line('نص الإشعار', el('textarea', { name: 'body', required: true, rows: 4 })),
+], 'نشر لجميع الطلاب', async (data, message, element) => {
+  await api('/notices', { ...data, kind: 'news', publish: true });
+  element.reset();
+  message.textContent = 'نُشر في إشعارات الصف.';
+})]);
 const suggestionsPage = show(async () => {
   const entries = await api('/suggestions');
   return [heading('اقتراحات الطلاب'), ...(entries.length ? entries.map(item => card(
-    el('strong', {}, item.name), el('p', { class: 'prose' }, item.body), el('small', {}, date(item.created)))) :
+    el('strong', {}, item.name), el('p', { class: 'prose' }, item.body), el('small', {}, date(item.created)),
+    form([line('رد المالك', el('textarea', { name: 'body', required: true, maxlength: 2000 }, item.reply || ''))],
+      'إرسال الرد', async (data, message) => {
+        await api('/reply-suggestion', { id: item.id, body: data.body });
+        message.textContent = 'وصل الرد إلى صندوق الطالب.';
+      }))) :
     [empty('ما وصل أي اقتراح بعد.')])];
 });
 function ready(user) {

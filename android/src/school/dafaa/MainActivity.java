@@ -42,11 +42,13 @@ public final class MainActivity extends Activity {
     private static final int PICK_IMAGE = 23;
     private String origin;
     private WebView web;
-    private boolean localHomeOpen;
-    private static final int INK = 0xff211740;
-    private static final int PURPLE = 0xff5834ae;
-    private static final int MUTED = 0xff5e526f;
-    private static final int FIELD = 0xfff7f4ff;
+    private String localName;
+    private boolean atHome;
+    private static final String ASSETS = "https://classroom.invalid/";
+    private static final int INK = 0xff173d39;
+    private static final int TEAL = 0xff11695d;
+    private static final int MUTED = 0xff47665d;
+    private static final int FIELD = 0xffedf4ef;
     private ValueCallback<Uri[]> chooser;
 
     @Override public void onCreate(Bundle state) {
@@ -61,6 +63,17 @@ public final class MainActivity extends Activity {
             try { origin = httpsOrigin(getPreferences(MODE_PRIVATE).getString("origin", "")); }
             catch (Exception ignored) {}
         }
+        Uri invitation = getIntent().getData();
+        if (invitation != null && "qumdorous".equals(invitation.getScheme()) && "join".equals(invitation.getHost())) {
+            try {
+                final String address = httpsOrigin(invitation.getQueryParameter("school"));
+                new android.app.AlertDialog.Builder(this).setTitle("الانضمام إلى الصف")
+                    .setMessage("افتح هذا العنوان إذا أرسله لك المالك:"+ "\n" + address)
+                    .setPositiveButton("فتح الصف", (dialog, which) -> connect(address))
+                    .setNegativeButton("إلغاء", (dialog, which) -> finish()).show();
+                return;
+            } catch (Exception ignored) {}
+        }
         if (origin.isEmpty()) setup("");
         else openStudentApp();
     }
@@ -73,7 +86,7 @@ public final class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        root.setBackgroundColor(Color.rgb(246,244,252));
+        root.setBackgroundColor(Color.rgb(243,246,241));
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             int top;
             int bottom;
@@ -149,7 +162,7 @@ public final class MainActivity extends Activity {
         hero.setOrientation(LinearLayout.VERTICAL);
         hero.setPadding(dp(22), dp(23), dp(22), dp(23));
         GradientDrawable background = new GradientDrawable(GradientDrawable.Orientation.TR_BL,
-            new int[]{0xff29164e, 0xff5934a9});
+            new int[]{0xff173d39, 0xff20645e});
         background.setCornerRadius(dp(28));
         hero.setBackground(background);
         add(hero, text(title, 31, Color.WHITE, true), 0);
@@ -180,7 +193,7 @@ public final class MainActivity extends Activity {
         button.setTextColor(Color.WHITE);
         button.setMinHeight(dp(52));
         button.setBackground(new android.graphics.drawable.RippleDrawable(
-            android.content.res.ColorStateList.valueOf(0x44ffffff), surface(PURPLE, 15), null));
+            android.content.res.ColorStateList.valueOf(0x44ffffff), surface(TEAL, 15), null));
         return button;
     }
 
@@ -193,7 +206,7 @@ public final class MainActivity extends Activity {
     }
 
     private void setup(String message) {
-        localHomeOpen = false;
+        localName = null;
         if (web != null) {
             LinearLayout old = (LinearLayout) web.getParent();
             if (old != null) old.removeView(web);
@@ -210,6 +223,11 @@ public final class MainActivity extends Activity {
             Button retry = primary("إعادة المحاولة");
             add(card, retry, 12);
             retry.setOnClickListener(view -> openStudentApp());
+            section(card, "فتح مساحة الهاتف", view -> {
+                getPreferences(MODE_PRIVATE).edit().remove("origin").apply();
+                origin = "";
+                setup("");
+            });
             return;
         }
         add(card, text(first ? "إنشاء حساب محلي" : "تسجيل الدخول", 22, INK, true), 0);
@@ -265,7 +283,7 @@ public final class MainActivity extends Activity {
     }
 
     private android.database.sqlite.SQLiteDatabase openStudentCatalog() throws java.io.IOException {
-        java.io.File file = new java.io.File(getCacheDir(), "student-0.4.4.sqlite");
+        java.io.File file = new java.io.File(getCacheDir(), "student-0.5.0.sqlite");
         if (!file.exists()) {
             java.io.File staging = java.io.File.createTempFile("student-", ".tmp", getCacheDir());
             try {
@@ -290,6 +308,7 @@ public final class MainActivity extends Activity {
     }
 
     private LinearLayout localSection(String name, String title) {
+        atHome = false;
         LinearLayout screen = panel();
         banner(screen, title, "قوم دروس");
         section(screen, "العودة للرئيسية", view -> showLocalHome(name));
@@ -297,18 +316,88 @@ public final class MainActivity extends Activity {
     }
 
     private void showLocalHome(String name) {
-        localHomeOpen = true;
+        localName = name;
+        atHome = true;
         LinearLayout screen = panel();
-        banner(screen, "أهلًا، " + name, "قوم دروس");
-        LinearLayout tools = card(screen);
-        section(tools, "المواد الدراسية", view -> showLocalSubjects(name));
-        section(tools, "الأخبار والتحديثات", view -> showLocalUpdates(name));
-        section(tools, "ملاحظاتي", view -> showLocalNotes(name, 0));
-        section(tools, "اقتراحات", view -> showLocalSuggestion(name));
-        Button logout = new Button(this);
-        logout.setText("تسجيل الخروج");
-        add(screen, logout, 12);
-        logout.setOnClickListener(view -> setup(""));
+        banner(screen, "موادّي الدراسية", "قوم دروس · " + name);
+        String[] subjects = localSubjects();
+        LinearLayout library = card(screen);
+        for (String subject : subjects) {
+            Button item = new Button(this);
+            item.setText(subject + "    ·    المصادر والاختبارات");
+            item.setTextColor(INK);
+            item.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL);
+            item.setPadding(dp(16),0,dp(16),0);
+            item.setBackground(surface(FIELD,12));
+            add(library,item,7);
+            item.setOnClickListener(v -> openSources(name, subject));
+        }
+        section(screen, "الأخبار والإشعارات", v -> showLocalUpdates(name));
+        section(screen, "اقتراحاتي", v -> showLocalSuggestion(name));
+        section(screen, "الإعدادات", v -> {
+            LinearLayout options = card(localSection(name,"الإعدادات"));
+            add(options,text(name,20,INK,true),0);
+            section(options,"ملاحظاتي المحفوظة", w -> showLocalNotes(name,0));
+            section(options,"ربط حساب الصف", w -> configureClass(options));
+            section(options,"تسجيل الخروج", w -> setup(""));
+        });
+    }
+
+    private void connect(String address) {
+        origin = address;
+        getPreferences(MODE_PRIVATE).edit().putString("origin", address).apply();
+        localName = null;
+        openStudentApp();
+    }
+
+    private void configureClass(LinearLayout parent) {
+        EditText address = field(parent, "رابط الطلاب من المالك", InputType.TYPE_TEXT_VARIATION_URI);
+        section(parent, "فتح حساب الصف", v -> {
+            try { connect(httpsOrigin(address.getText().toString().trim())); }
+            catch(Exception error){ address.setError("أدخل رابط HTTPS الصحيح."); }
+        });
+    }
+
+    private void openSources(String name, String subject) {
+        atHome = false;
+        LinearLayout root = layout();
+        Button back = new Button(this);
+        back.setText("المواد الدراسية");
+        root.addView(back);
+        back.setOnClickListener(v -> leaveSources(name));
+        Button quizzes = new Button(this);
+        quizzes.setText("اختبارات المادة");
+        root.addView(quizzes);
+        quizzes.setOnClickListener(v -> new android.app.AlertDialog.Builder(this)
+            .setTitle("اختبارات " + subject).setMessage("افتح حساب الصف للاطلاع على الاختبارات التي نشرها المالك.")
+            .setPositiveButton("حسنًا",null).show());
+        web = new WebView(this);
+        root.addView(web,new LinearLayout.LayoutParams(-1,0,1));
+        web.getSettings().setJavaScriptEnabled(true);
+        web.getSettings().setDomStorageEnabled(true);
+        web.getSettings().setAllowFileAccess(false);
+        web.getSettings().setAllowContentAccess(false);
+        web.setWebViewClient(new WebViewClient() {
+            @Override public boolean shouldOverrideUrlLoading(WebView view,String url){ return true; }
+            @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view,WebResourceRequest request) {
+                String file = request.getUrl().getLastPathSegment();
+                if (request.getUrl().toString().startsWith(ASSETS) && java.util.Arrays.asList("source.html","source.js","ocr-worker.js","core.js","models.js").contains(file)) {
+                    try {return new android.webkit.WebResourceResponse(file.endsWith(".html") ? "text/html" : "application/javascript","UTF-8",getAssets().open(file));}
+                    catch(Exception ignored){}
+                }
+                return new android.webkit.WebResourceResponse("text/plain","UTF-8",new java.io.ByteArrayInputStream(new byte[0]));
+            }
+        });
+        enablePicker(true);
+        web.loadUrl(ASSETS + "source.html?subject=" + Uri.encode(subject));
+    }
+
+    private void leaveSources(String name) {
+        if (web != null) {
+            ((LinearLayout) web.getParent()).removeView(web);
+            web.destroy(); web = null;
+        }
+        showLocalHome(name);
     }
 
     private String[] localSubjects() {
@@ -318,18 +407,6 @@ public final class MainActivity extends Activity {
             while (rows.moveToNext()) names.add(rows.getString(0));
         } catch (Exception error) { android.util.Log.e("QumDorous", "Unable to open subject catalog", error); }
         return names.toArray(new String[0]);
-    }
-
-    private void showLocalSubjects(String name) {
-        LinearLayout screen = localSection(name, "المواد الدراسية");
-        String[] subjects = localSubjects();
-        if (subjects.length == 0) add(card(screen), text("تعذّر فتح المواد.", 16, MUTED, false), 0);
-        for (int index = 0; index < subjects.length; index++) {
-            final int subject = index;
-            LinearLayout item = card(screen);
-            add(item, text(subjects[index], 19, INK, true), 0);
-            section(item, "ملاحظات المادة", view -> showLocalNotes(name, subject));
-        }
     }
 
     private void showLocalUpdates(String name) {
@@ -424,6 +501,7 @@ public final class MainActivity extends Activity {
         root.addView(progress);
         root.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
         WebView page = web;
+        web.getSettings().setUserAgentString(web.getSettings().getUserAgentString() + " QumDorousAndroid");
         Runnable timedOut = () -> {
             if (web == page && !isDestroyed()) {
                 page.stopLoading();
@@ -463,9 +541,14 @@ public final class MainActivity extends Activity {
                 if (request.isForMainFrame()) connectionError(view);
             }
         });
+        enablePicker(false);
+        web.loadUrl(origin + "/");
+    }
+
+    private void enablePicker(boolean local) {
         web.setWebChromeClient(new WebChromeClient() {
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
-                if (!allowed(Uri.parse(view.getUrl() == null ? "" : view.getUrl()))) return false;
+                if (local ? view.getUrl() == null || !view.getUrl().startsWith(ASSETS) : !allowed(Uri.parse(view.getUrl() == null ? "" : view.getUrl()))) return false;
                 if (chooser != null) chooser.onReceiveValue(null);
                 chooser = callback;
                 Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -480,7 +563,6 @@ public final class MainActivity extends Activity {
                 return true;
             }
         });
-        web.loadUrl(origin + "/");
     }
 
     @Override protected void onActivityResult(int code, int result, Intent data) {
@@ -492,7 +574,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
-        if (localHomeOpen) { setup(""); return; }
+        if (localName != null && !atHome) { leaveSources(localName); return; }
         if (web != null && web.canGoBack()) web.goBack();
         else super.onBackPressed();
     }

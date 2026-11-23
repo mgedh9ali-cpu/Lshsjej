@@ -23,6 +23,7 @@ CREATE INDEX IF NOT EXISTS submission_image ON submissions(subject,digest,state)
 CREATE TABLE IF NOT EXISTS quizzes(id INTEGER PRIMARY KEY,subject INTEGER,title TEXT,questions TEXT,published INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS attempts(id INTEGER PRIMARY KEY,user INTEGER,quiz INTEGER,score INTEGER,total INTEGER,created INTEGER);
 CREATE TABLE IF NOT EXISTS suggestions(id INTEGER PRIMARY KEY, student INTEGER NOT NULL, body TEXT NOT NULL, created INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS suggestion_replies(suggestion INTEGER PRIMARY KEY, body TEXT NOT NULL, updated INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS notices(id INTEGER PRIMARY KEY,kind TEXT,title TEXT,body TEXT,subject INTEGER,visible INTEGER,published INTEGER);
 CREATE INDEX IF NOT EXISTS attempts_learner ON attempts(user,id);
 CREATE INDEX IF NOT EXISTS quizzes_subject ON quizzes(subject,published,id);
@@ -131,7 +132,7 @@ const time = value => {
   return parsed;
 };
 const cookieName = area => 'school_' + area;
-const cookie = (area, token, age) => cookieName(area) + '=' + token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=' + age + (env.SCHOOL_SECURE === '1' ? '; Secure' : '');
+const cookie = (area, token, age) => cookieName(area) + '=' + token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=' + age + (env.SCHOOL_SECURE === '1' || (area === 'student' && env.STUDENT_ORIGIN?.startsWith('https://')) ? '; Secure' : '');
 const tokenFrom = (req, area) => (req.headers.cookie || '').match(new RegExp('(?:^|; )' + cookieName(area) + '=([a-f0-9]{64})(?:;|$)'))?.[1];
 function authenticate(req, area) {
   const token = tokenFrom(req, area);
@@ -306,6 +307,7 @@ async function api(req, res, area, route, params) {
     });
   }
   if (area === 'student') {
+    if (method === 'GET' && route === '/my-suggestions') return all('SELECT s.id,s.body,s.created,r.body AS reply,r.updated FROM suggestions s LEFT JOIN suggestion_replies r ON r.suggestion=s.id WHERE s.student=? ORDER BY s.id DESC', user.id);
     if (method === 'POST' && route === '/suggestions') {
       limit('suggestions:' + user.id, 10, 600000);
       const data = await json(req, 16_384);
@@ -364,7 +366,7 @@ async function api(req, res, area, route, params) {
   }
   if (method === 'GET' && route === '/suggestions') {
     ownerOnly(user);
-    return all('SELECT s.id,s.body,s.created,u.name FROM suggestions s JOIN users u ON u.id=s.student ORDER BY s.id DESC LIMIT 200');
+    return all('SELECT s.id,s.body,s.created,u.name,r.body AS reply FROM suggestions s JOIN users u ON u.id=s.student LEFT JOIN suggestion_replies r ON r.suggestion=s.id ORDER BY s.id DESC LIMIT 200');
   }
   if (method === 'GET' && route === '/overview') {
     ownerOnly(user);
@@ -395,6 +397,14 @@ async function api(req, res, area, route, params) {
   const data = await json(req);
   return transaction(() => {
     switch (route) {
+      case '/reply-suggestion': {
+        ownerOnly(user);
+        const id = Number(data.id);
+        if (!get('SELECT id FROM suggestions WHERE id=?', id)) fail(404, 'الاقتراح غير موجود.');
+        run('INSERT INTO suggestion_replies VALUES(?,?,?) ON CONFLICT(suggestion) DO UPDATE SET body=excluded.body, updated=excluded.updated', id, field(data.body, 2000), Date.now());
+        audit(user, 'رد على اقتراح', id);
+        return {};
+      }
       case '/accounts': {
         ownerOnly(user);
         const batch = data.accounts || [data];
@@ -535,6 +545,12 @@ function serve(area, port) {
         const data = await api(req, res, area, url.pathname.slice(4), url.searchParams);
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
         res.end(JSON.stringify(data));
+        return;
+      }
+      if (req.method === 'GET' && area === 'admin' && url.pathname === '/api-class-address') {
+        ownerOnly(authenticate(req, area));
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ address: env.STUDENT_ORIGIN || null }));
         return;
       }
       if (req.method === 'GET' && url.pathname === '/health') {

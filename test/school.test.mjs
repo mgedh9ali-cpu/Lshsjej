@@ -87,6 +87,11 @@ test('separate interfaces, owner approvals, private results, notices and image d
   assert.equal((await student('/suggestions')).status, 404);
   assert.equal((await admin('/suggestions', undefined, assistant.cookie)).status, 403);
   assert.equal((await admin('/suggestions')).body[0].body, 'أضفوا تمارين للمراجعة');
+  const entry = (await student('/my-suggestions')).body[0];
+  assert.equal(entry.reply, null);
+  assert.equal((await admin('/reply-suggestion', {id:entry.id,body:'تمت المراجعة'}, assistant.cookie)).status, 403);
+  assert.equal((await admin('/reply-suggestion', {id:entry.id,body:'تمت المراجعة'})).status, 200);
+  assert.equal((await student('/my-suggestions')).body[0].reply, 'تمت المراجعة');
   const subjects = (await student('/subjects')).body;
   assert.equal(subjects.length, 5);
   const subject = subjects[0].id;
@@ -101,6 +106,7 @@ test('separate interfaces, owner approvals, private results, notices and image d
   const second = await request(studentPort, '/login', { username: 'student2', password });
   await student('/password', { password: 'another-student-key' }, second.cookie);
   assert.deepEqual((await student('/results', undefined, second.cookie)).body, []);
+  assert.deepEqual((await student('/my-suggestions', undefined, second.cookie)).body, []);
   await admin('/notices', { kind: 'reminder', title: 'لاحقًا', body: 'مراجعة', subject, publish: true, visible: new Date(Date.now() + 86400000).toISOString() });
   await admin('/notices', { kind: 'reminder', title: 'اليوم', body: 'اختبار', subject, publish: true });
   assert.deepEqual((await student('/notices')).body.map(item => item.title), ['اليوم']);

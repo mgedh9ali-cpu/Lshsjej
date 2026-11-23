@@ -70,38 +70,38 @@ input[type=file]::file-selector-button{border:0;border-radius:.45rem;background:
 @media(prefers-reduced-motion:reduce){button{transition:none}}
 @font-face{font-family:Cairo;src:url("/fonts/cairo-arabic.woff2") format("woff2");font-weight:200 1000;font-display:swap;unicode-range:U+0600-06FF,U+0750-077F,U+0870-08FF,U+FB50-FDFF,U+FE70-FEFF}
 @font-face{font-family:Cairo;src:url("/fonts/cairo-latin.woff2") format("woff2");font-weight:200 1000;font-display:swap;unicode-range:U+0000-00FF,U+2000-206F,U+2212,U+2215}
-:root{font-family:Thmanyah,Cairo,Tahoma,system-ui,sans-serif;color:#211943;background:#f6f4fc;--green:#5234ab;--line:#e0d8f3;--muted:#655a7c;--radius:18px}
+:root{font-family:Thmanyah,Cairo,Tahoma,system-ui,sans-serif;color:#193632;background:#f6f4fc;--green:#5234ab;--line:#e0d8f3;--muted:#655a7c;--radius:18px}
 body.admin{background:#f2f1f8}
 header{position:relative;border-color:#e9e3f5;box-shadow:none}
-.brand{color:#30215e}
+.brand{color:#193b38}
 .brand-mark{width:42px;height:42px;object-fit:cover;border-radius:13px}
 main{max-width:1160px;gap:1.05rem}
-.hero,.admin .hero{position:relative;overflow:hidden;background:radial-gradient(ellipse at 0% 130%,#6a42bc,transparent 60%),linear-gradient(120deg,#211447,#3a2376);border:0;border-radius:22px;padding:clamp(1.3rem,4vw,3rem);isolation:isolate}
+.hero,.admin .hero{position:relative;overflow:hidden;background:radial-gradient(ellipse at 0% 130%,#27766e,transparent 60%),linear-gradient(120deg,#133a3a,#155451);border:0;border-radius:22px;padding:clamp(1.3rem,4vw,3rem);isolation:isolate}
 .hero::before,.hero::after{content:"";width:12rem;aspect-ratio:1;border:1px solid #8df8d845;position:absolute;inset-inline-end:1rem;inset-block-start:-7rem;border-radius:50%;z-index:-1;pointer-events:none}
 .hero::after{width:16rem;inset-inline-end:-2rem;inset-block-start:-9rem}
-.hero p{color:#e2d9f8}
+.hero p{color:#d9ece7}
 .card{box-shadow:0 5px 22px #2718550c}
-.primary{background:#5030a4;border-color:#5030a4}
-.primary:hover:not(:disabled){background:#3e247f}
-.secondary,.subject,.list-button{color:#463085}
-.secondary:hover:not(:disabled),.list-button:hover:not(:disabled){background:#f0eafa;border-color:#b7a6dc}
+.primary{background:#116960;border-color:#116960}
+.primary:hover:not(:disabled){background:#0b514a}
+.secondary,.subject,.list-button{color:#1c524e}
+.secondary:hover:not(:disabled),.list-button:hover:not(:disabled){background:#e5f3ef;border-color:#b7a6dc}
 .subject:hover:not(:disabled){border-color:#a18cd0;box-shadow:0 10px 22px #38216e18;transform:translateY(-2px)}
-.subject-icon{color:#5030a4;background:#eee5ff}
+.subject-icon{color:#116960;background:#dceee7}
 .subject:nth-child(2n) .subject-icon{color:#08644f;background:#ddf8ee}
 .subject:nth-child(3n) .subject-icon{color:#873f20;background:#ffeddc}
-button[aria-pressed="true"]{background:#5030a4;border-color:#5030a4}
-.field :is(input,textarea,select){border-color:#c9bddf;background:#fdfbff;color:#211943}
-input[type=file]::file-selector-button{background:#eee5ff;color:#463085}
+button[aria-pressed="true"]{background:#116960;border-color:#116960}
+.field :is(input,textarea,select){border-color:#b9cec5;background:#fcfdfb;color:#193632}
+input[type=file]::file-selector-button{background:#dceee7;color:#1c524e}
 .tag{background:#ddf8ee;color:#106049}
 .login-layout{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:1rem;margin-block:clamp(.4rem,5vh,3rem);align-items:stretch}
 .login-layout .form{padding:clamp(1.15rem,4vw,2rem);margin:0}
 .login-hero{display:grid;align-content:center;gap:.7rem}
 .login-hero img{border-radius:22px;box-shadow:0 10px 32px #170b3e80}
 .metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.65rem}
-.metric-value{font-size:clamp(1.4rem,4vw,2.25rem);color:#5030a4;line-height:1.2}
+.metric-value{font-size:clamp(1.4rem,4vw,2.25rem);color:#116960;line-height:1.2}
 .metrics .card p{line-height:1.55;color:#544767}
 .processing-panel .metrics{margin-top:.7rem}
-.processing-panel .metrics .card{background:#f7f3ff;box-shadow:none}
+.processing-panel .metrics .card{background:#f0f6f2;box-shadow:none}
 .shortcuts .subject{min-height:68px}
 @keyframes arrive{from{opacity:.25;transform:translateY(9px)}to{opacity:1;transform:translateY(0)}}
 main>.hero,main>.grid,main>.metrics,.login-layout{animation:arrive .25s cubic-bezier(.2,.7,.3,1) both}
@@ -109,12 +109,14 @@ button{transition:background-color .16s,border-color .16s,box-shadow .16s,transf
 @media(max-width:650px){.login-layout{grid-template-columns:1fr}.login-hero img{width:57px;height:57px;border-radius:14px}.metrics .card{padding:.65rem}.metrics .card p{font-size:.82rem}}
 @media(prefers-reduced-motion:reduce){main>.hero,main>.grid,main>.metrics,.login-layout{animation:none}button{transition:none}.subject:hover:not(:disabled){transform:none}}
 .archive-day{display:grid;gap:.75rem}.archive-image{margin:0;padding:.65rem;border:1px solid var(--line);border-radius:12px}.archive-image summary{cursor:pointer;font-weight:650}.archive-image img{display:block;width:auto;max-width:100%;max-height:34rem;border-radius:10px;object-fit:contain}
-.class-progress{border-inline-start:4px solid #45c6a8}.class-progress strong{color:#5030a4;font-size:1.25em}
+.class-progress{border-inline-start:4px solid #45c6a8}.class-progress strong{color:#116960;font-size:1.25em}
 .login-hero img.study-illustration{width:100%;height:auto;max-height:15rem;object-fit:cover;object-position:center;border-radius:15px;box-shadow:none}
 @media(max-width:650px){.login-hero img.study-illustration{max-height:9rem}}
 .simple-login{width:min(100%,420px);margin:4vh auto 0}
 .simple-login{width:min(100%,460px);margin:clamp(1rem,7vh,4rem) auto 0}
 .simple-login .form{border-radius:26px;padding:0 1.35rem 1.35rem;overflow:hidden;box-shadow:0 16px 44px #25154916}
-.simple-login h1{margin:0 -1.35rem .5rem;padding:1.2rem 1.35rem;color:white;background:linear-gradient(135deg,#29164e,#5934a9);font-size:1.65rem}
+.simple-login h1{margin:0 -1.35rem .5rem;padding:1.2rem 1.35rem;color:white;background:linear-gradient(135deg,#123d3b,#20645c);font-size:1.65rem}
 .simple-login .field{margin-block:.25rem}
 .simple-login .primary{justify-self:stretch;margin-top:.35rem}
+
+body,body.admin{background:#f3f6f1;color:#183c38} header{background:#fff;border-color:#d9e4dc}.hero p{color:#d9ece7}.field input[type=file]{padding:1rem;border:1px dashed #4e857a}.student nav,.admin nav{gap:.3rem}.student nav button,.admin nav button{border-radius:.7rem}.brand-mark{background:#124d46;color:white}.simple-login h1{background:#164f49}

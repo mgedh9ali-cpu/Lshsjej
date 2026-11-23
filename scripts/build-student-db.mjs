@@ -7,5 +7,5 @@ db.exec(`
 const names = ['الفيزياء', 'الكيمياء', 'العلوم', 'الإنجليزي', 'الرياضيات'];
 const subject = db.prepare('INSERT INTO subjects VALUES (?, ?)');
 names.forEach((name, id) => subject.run(id, name));
-db.prepare('INSERT INTO updates VALUES (?, ?, ?)').run(1, 'الأقسام متاحة على الهاتف', 'يمكنك فتح المواد وحفظ ملاحظاتك لكل مادة دون اتصال.');
+db.prepare('INSERT INTO updates VALUES (?, ?, ?)').run(1, 'قراءة صور الدروس', 'افتح المادة واختر صورة. يُحفَظ النص مع الصورة على هاتفك. تظهر إشعارات المالك عند فتح حساب الصف.');
 db.close();

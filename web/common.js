@@ -56,6 +56,7 @@ export function login(area, ready) {
   if (area === 'student') {
     app.replaceChildren(el('div', { class: 'simple-login' }, form([
       el('h1', {}, 'تسجيل الدخول'),
+      location.protocol === 'https:' && !navigator.userAgent.includes('QumDorousAndroid') && el('a', { href: 'qumdorous://join?school=' + encodeURIComponent(location.origin) }, 'فتح الصف في تطبيق أندرويد'),
       line('الاسم', input('name', { autocomplete: 'username', required: true })),
       line('كلمة السر', input('password', { type: 'password', autocomplete: 'current-password', required: true })),
     ], 'دخول', async data => ready(await api('/login', data)))));
