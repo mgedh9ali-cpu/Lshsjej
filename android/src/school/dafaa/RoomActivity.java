@@ -65,7 +65,7 @@ public final class RoomActivity extends Activity {
                 try{
                     JSONObject p=new JSONObject(raw);String op=p.getString("op");
                     Object value;
-                    if(op.equals("boot"))value=RoomStore.obj("owner",owner,"studentName",token.isEmpty()?"":getPreferences(MODE_PRIVATE).getString(owner?"ownerName":"studentName",""),"locked",!unlocked&&getSharedPreferences("offline_student",MODE_PRIVATE).contains("hash"),"paired",!remote.isEmpty(),"setup",owner&&((JSONObject)store.handle(true,"device",RoomStore.obj("op","status"))).optBoolean("setup"));
+                    if(op.equals("boot"))value=RoomStore.obj("owner",owner,"studentName",token.isEmpty()?"":getPreferences(MODE_PRIVATE).getString(owner?"ownerName":"studentName",""),"savedSession",!token.isEmpty(),"locked",!unlocked&&getSharedPreferences("offline_student",MODE_PRIVATE).contains("hash"),"paired",!remote.isEmpty(),"setup",owner&&((JSONObject)store.handle(true,"device",RoomStore.obj("op","status"))).optBoolean("setup"));
                     else if(!owner&&op.equals("lock")){unlocked=false;value=RoomStore.obj();}
                     else if(!owner&&op.equals("unlock")){
                         android.content.SharedPreferences old=getSharedPreferences("offline_student",MODE_PRIVATE);
