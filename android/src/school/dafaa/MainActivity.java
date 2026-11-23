@@ -371,7 +371,6 @@ public final class MainActivity extends Activity {
                 for(View item:cards)item.setVisibility(item.getTag().toString().contains(s.toString().trim())?View.VISIBLE:View.GONE);
             }
         });
-        section(screen,"فتح الصف المشترك",v -> openClassroom());
     }
 
     private void showSettings(String name){
