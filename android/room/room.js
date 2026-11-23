@@ -42,7 +42,7 @@ function form(title,fields,label,fn){
     catch(err){status.textContent=err.message;}finally{submit.disabled=false;}};
   return f;
 }
-const links=()=>[['home',owner?'لوحة الصف':'المواد'],['feed','الإشعارات'],...(owner?[['feedback','الاقتراحات'],['accounts','الطلاب']]:[]),['settings','الإعدادات']];
+const links=()=>[['home',owner?'لوحة الصف':'المواد'],['feed','الإشعارات'],['feedback','الاقتراحات'],...(owner?[['accounts','الطلاب']]:[]),['settings','الإعدادات']];
 // Icon geometry from Lucide (ISC), https://lucide.dev/license.
 const navIconPaths={
   home:['m3 10 9-7 9 7v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z','M9 21v-6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v6'],
@@ -105,6 +105,7 @@ async function boot(){
   await go(locked&&!owner?'unlock':owner&&!name?'login':'home');
 }
 async function go(next,item,focusPage=false){
+  activeReading?.abort();
   if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
   page=next;const mine=++revision;
   if(item&&next==='subject')selected=item;
@@ -118,6 +119,7 @@ async function go(next,item,focusPage=false){
       main.replaceChildren(...nodes.filter(Boolean));window.scrollTo(0,0);
       if(next==='accounts')refreshRegistrations($('#registrations'));
       if(next==='feed'&&!owner)refreshStudentNotices(true).catch(err=>message(err.message));
+      if(next==='feedback'&&!owner)refreshStudentFeedback();
       if(focusPage){
         const heading=main.querySelector('h1');
         heading.tabIndex=-1;heading.focus({preventScroll:true});
@@ -192,8 +194,50 @@ function feed(){
   }),...noticeCards(cache.notices),!cache.notices.length&&el('p','ستظهر أخبار الصف هنا عند نشرها.'),button('تحديث',()=>go('feed'))];
 }
 const date=v=>new Intl.DateTimeFormat('ar-SY',{weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(v);
-function feedback(){if(offline)return [hero('اقتراحاتي','صندوق الطالب'),el('p','اربط حساب الصف لإرسال اقتراح وقراءة ردّ المالك.'),button('إعدادات الصف',()=>go('settings'))];return [hero(owner?'صندوق الاقتراحات':'اقتراحاتي',owner?'مراجعة رسائل الطلاب':'رسائلي وردود المالك'),!owner&&form('اقتراح جديد',[field('اكتب اقتراحك','body','textarea')],'إرسال للمالك',async d=>{await rpc('suggest',d);await go('feedback');}),
-  ...cache.feedback.map(f=>wrap('card',el('small',f.name+' · '+date(f.created)),el('pre',f.body),el('b',f.reply?'رد المالك':'بانتظار الرد'),el('pre',f.reply||''),...(owner?[form('الرد',[field('نص الرد','body','textarea',f.reply||'')],'حفظ الرد',async d=>{await rpc('reply',{...d,id:f.id});await go('feedback');})]:[]))),button('تحديث',()=>go('feedback'))];}
+function feedbackCard(entry){
+  const heading=(owner?entry.name+' · ':'')+date(entry.created);
+  return wrap('card',el('small',heading),el('pre',entry.body),el('b',entry.reply?'رد المالك':'بانتظار الرد'),
+    ...(entry.reply?[el('pre',entry.reply)]:[]));
+}
+async function refreshStudentFeedback(){
+  const list=$('#student-feedback');
+  if(!list)return;
+  try{
+    const {entries}=await rpc('studentFeedback');
+    if(list.isConnected)list.replaceChildren(...(entries.length?entries.map(feedbackCard):[el('p','لم ترسل اقتراحات بعد.','empty-state')]));
+  }catch(error){if(list.isConnected)list.replaceChildren(el('p',error.message,'empty-state'));}
+}
+function feedback(){
+  if(owner)return [hero('صندوق الاقتراحات','رسائل الطلاب'),
+    ...cache.feedback.map(entry=>{
+      const card=feedbackCard(entry);
+      card.append(form('الرد',[field('نص الرد','body','textarea',entry.reply||'')],'حفظ الرد',async data=>{
+        await rpc('reply',{...data,id:entry.id});await go('feedback');
+      }));
+      return card;
+    }),
+    !cache.feedback.length&&el('p','لا توجد اقتراحات بعد.','empty-state'),button('تحديث',()=>go('feedback'))];
+  const draftKey='suggestion-draft';
+  const draft=field('اكتب اقتراحك','body','textarea',localStorage.getItem(draftKey)||'');
+  const input=draft.querySelector('textarea');input.maxLength=2000;
+  input.oninput=()=>localStorage.setItem(draftKey,input.value);
+  const list=wrap('registration-list');list.id='student-feedback';
+  list.append(el('p','جارٍ جلب الاقتراحات…','empty-state'));
+  const composer=form('اقتراح جديد',[draft],'إرسال للمالك',async data=>{
+    const body=data.body.trim();
+    if(!body)throw Error('اكتب الاقتراح أولًا.');
+    if(localStorage.getItem('suggestion-pending-body')!==body){
+      localStorage.setItem('suggestion-pending-id',Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,'0')).join(''));
+      localStorage.setItem('suggestion-pending-body',body);
+    }
+    const {entries}=await rpc('studentSuggest',{body,requestId:localStorage.getItem('suggestion-pending-id')});
+    localStorage.removeItem('suggestion-pending-body');localStorage.removeItem('suggestion-pending-id');
+    if(input.value.trim()===body){input.value='';localStorage.removeItem(draftKey);}
+    list.replaceChildren(...entries.map(feedbackCard));
+    message('أُرسل الاقتراح إلى المالك.');
+  });
+  return [hero('الاقتراحات','رسائلي وردود المالك'),composer,button('تحديث الردود',refreshStudentFeedback),list];
+}
 const dateTime=v=>new Intl.DateTimeFormat('ar-SY',{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}).format(v);
 function updateRegistrationList(container, data){
   container.replaceChildren(el('small',number.format(data.total)+' تسجيل'),
@@ -241,28 +285,132 @@ function settings(){
     offline&&hasAccount&&!locked&&button('تسجيل الخروج',async()=>{await rpc('lock');locked=true;await go('unlock');}),
     !offline&&button('تسجيل الخروج',async()=>{await rpc('logout');name='';await go('login');})];
 }
-function ocr(bytes){
+let activeReading=null;
+function ocr(bytes,language,onProgress,signal){
   const worker=new Worker('ocr-worker.js');
   return new Promise((resolve,reject)=>{
-    const stop=(error,value)=>{clearTimeout(timer);worker.terminate();if(error)reject(Error(error));else resolve(value);};
-    const timer=setTimeout(()=>stop('استغرقت القراءة وقتًا طويلًا. قص الصورة وحاول مجددًا.'),90000);
-    worker.onerror=()=>stop('تعذّر تشغيل قارئ الصور.');worker.onmessage=e=>{const d=e.data;stop(d.error||d.confidence<45||!d.text?'تعذّرت قراءة النص. جرّب صورة أوضح.':'',d.text);};
-    worker.postMessage(bytes,[bytes]);
+    const cancel=()=>finish(Error('أُوقفت القراءة.'));
+    const finish=(error,value)=>{
+      clearTimeout(timer);
+      signal.removeEventListener('abort',cancel);
+      worker.terminate();
+      if(error)reject(error);else resolve(value);
+    };
+    const timer=setTimeout(()=>finish(Error('انتهت مهلة القراءة. جرّب قصّ الصفحة أو اكتب النص يدويًا.')),65000);
+    signal.addEventListener('abort',cancel,{once:true});
+    worker.onerror=()=>finish(Error('تعذّر تشغيل قارئ الصور.'));
+    worker.onmessage=({data})=>{
+      if(data.type==='progress'){onProgress(data);return;}
+      finish(data.error?Error('تعذّرت قراءة الصورة. جرّب قصّها أو اكتب النص يدويًا.'):null,data);
+    };
+    worker.postMessage({bytes,language},[bytes]);
   });
 }
-function sourceForm(){
-  const upload=field('صورة من المعرض','file','file');upload.querySelector('input').accept='image/jpeg,image/png,image/webp';
-  return form('إضافة مصدر',[upload],offline?'قراءة الصورة وحفظ المصدر':'قراءة الصورة ونشر المصدر',async(d,status)=>{
-    if(!d.file.size||d.file.size>5000000)throw Error('اختر صورة حتى ٥ ميغابايت.');
-    const bmp=await createImageBitmap(d.file),canvas=el('canvas'),scale=Math.min(1,1900/Math.max(bmp.width,bmp.height));canvas.width=Math.max(1,Math.round(bmp.width*scale));canvas.height=Math.max(1,Math.round(bmp.height*scale));
-    const ctx=canvas.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(bmp,0,0,canvas.width,canvas.height);bmp.close();
-    status.textContent='جارٍ قراءة النص العربي والإنجليزي…';
-    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.92));
-    const body=await ocr(await blob.arrayBuffer());let image=canvas.toDataURL('image/jpeg',.65);
-    if(image.length>550000)image=canvas.toDataURL('image/jpeg',.35);
-    if(image.length>550000)throw Error('قص الصورة حول نص الصفحة ثم أعد المحاولة.');
-    await rpc('addSource',{subject:selected.id,title:body.trim().split('\n')[0].slice(0,180),body,image});await go('subject',selected);
+async function prepareSourceImage(file,crop,signal){
+  const image=await createImageBitmap(file);
+  try{
+    if(signal.aborted)throw Error('أُوقفت القراءة.');
+    const width=crop==='whole'?image.width:Math.ceil(image.width/2);
+    const left=crop==='right'?image.width-width:0;
+    const scale=Math.min(1,1850/Math.max(width,image.height),Math.sqrt(2300000/(width*image.height)));
+    const canvas=el('canvas');
+    canvas.width=Math.max(1,Math.round(width*scale));canvas.height=Math.max(1,Math.round(image.height*scale));
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});
+    ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(image,left,0,width,image.height,0,0,canvas.width,canvas.height);
+    let original=canvas.toDataURL('image/jpeg',.72);
+    if(original.length>550000)original=canvas.toDataURL('image/jpeg',.42);
+    if(original.length>550000)throw Error('قص الصورة حول النص أو اختر صورة أصغر.');
+    const pixels=ctx.getImageData(0,0,canvas.width,canvas.height);
+    const histogram=new Uint32Array(256);
+    const data=pixels.data;
+    for(let i=0;i<data.length;i+=4){
+      const level=(77*data[i]+150*data[i+1]+29*data[i+2])>>8;
+      histogram[level]++;data[i]=level;
+    }
+    const count=data.length/4;
+    let low=0,high=255,seen=0;
+    while(low<254&&seen+histogram[low]<count*.035)seen+=histogram[low++];
+    seen=0;
+    while(high>1&&seen+histogram[high]<count*.96)seen+=histogram[high--];
+    const spread=Math.max(48,high-low);
+    for(let i=0;i<data.length;i+=4)data[i]=data[i+1]=data[i+2]=255*(data[i]-low)/spread;
+    ctx.putImageData(pixels,0,0);
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.9));
+    if(!blob)throw Error('تعذّر تجهيز الصورة.');
+    return {original,bytes:await blob.arrayBuffer()};
+  }finally{image.close();}
+}
+function sourceForm(subject){
+  const upload=field('صورة من المعرض','file','file');
+  const picker=upload.querySelector('input');
+  picker.accept='image/jpeg,image/png,image/webp';
+  const select=(label,key,options,initial)=>{
+    const row=el('label',label,'field'), input=el('select');
+    input.name=key;
+    for(const [value,text] of options){const option=el('option',text);option.value=value;input.append(option);}
+    input.value=initial;row.append(input);return row;
+  };
+  const language=select('لغة الصورة','language',[['ara','العربية'],['eng','الإنجليزية'],['ara+eng','عربية وإنجليزية']],subject.name.includes('الإنجليزي')?'eng':'ara');
+  const crop=select('الجزء المطلوب','crop',[['whole','الصورة كاملة'],['right','الصفحة اليمنى'],['left','الصفحة اليسرى']],'whole');
+  const progress=el('progress');progress.max=100;progress.value=0;progress.hidden=true;
+  progress.setAttribute('aria-label','تقدّم قراءة الصورة');
+  const preview=wrap('registration-list');
+  const cancel=button('إيقاف القراءة',()=>activeReading?.abort());cancel.hidden=true;
+  const scan=form('قراءة صورة',[upload,language,crop,progress,cancel],'قراءة ومعاينة',async(data,status)=>{
+    if(!data.file.size||data.file.size>15000000)throw Error('اختر صورة حتى ١٥ ميغابايت.');
+    const controller=new AbortController();
+    activeReading=controller;preview.replaceChildren();
+    progress.hidden=false;progress.value=0;cancel.hidden=false;
+    const show=(percent,label)=>{
+      progress.value=Math.max(percent,progress.value);
+      status.textContent=label+' · '+number.format(progress.value)+'٪';
+    };
+    try{
+      show(5,'جارٍ تجهيز الصورة');
+      const {original,bytes}=await prepareSourceImage(data.file,data.crop,controller.signal);
+      if(controller.signal.aborted)return;
+      let result={text:'',confidence:0},failure='';
+      try{
+        let retry=false;
+        result=await ocr(bytes,data.language,event=>{
+          if(event.stage==='retry')retry=true;
+          if(event.stage==='recognize'){
+            const percent=Math.round(Math.max(0,Math.min(100,Number(event.percent)||0)));
+            show(retry?90+Math.round(percent*.08):25+Math.round(percent*.62),retry?'جارٍ إعادة فحص السطور':'جارٍ قراءة السطور');
+          }else{
+            const stage={engine:[10,'جارٍ تشغيل القارئ'],models:[17,'جارٍ تحميل نموذج اللغة'],retry:[90,'جارٍ إعادة فحص السطور'],finish:[98,'جارٍ تجهيز المعاينة']}[event.stage];
+            if(stage)show(...stage);
+          }
+        },controller.signal);
+      }catch(error){if(controller.signal.aborted)return;failure=error.message;}
+      if(controller.signal.aborted||!preview.isConnected)return;
+      const text=result.text.slice(0,16000);
+      const latin=(text.match(/[A-Za-z]/g)||[]).length;
+      const arabic=(text.match(/[\u0621-\u064a]/g)||[]).length;
+      const needsReview=result.confidence<70||text.length<8||(data.language==='ara'&&latin>Math.max(3,arabic*.1));
+      const titleField=field('عنوان المصدر','title','text',text.split('\n').find(line=>line.trim())?.trim().slice(0,180)||'');
+      titleField.querySelector('input').maxLength=180;
+      const bodyField=field('النص المقروء','body','textarea',text);
+      bodyField.querySelector('textarea').maxLength=16000;
+      bodyField.querySelector('textarea').rows=8;
+      const image=el('img');image.src=original;image.alt='صورة المصدر للمقارنة مع النص';
+      const save=form('معاينة وتعديل النص',[titleField,bodyField,image],offline?'حفظ المصدر':'نشر المصدر',async values=>{
+        const title=values.title.trim(),body=values.body.trim();
+        if(!title||!body)throw Error('اكتب عنوان المصدر والنص أولًا.');
+        await rpc('addSource',{subject:subject.id,title,body,image:original});
+        await go('subject',subject);
+      });
+      preview.append(save);
+      if(failure){progress.hidden=true;status.textContent=failure;}
+      else show(100,needsReview?'النص يحتاج مراجعة قبل الحفظ':'اكتملت القراءة. راجع النص قبل الحفظ');
+    }finally{
+      cancel.hidden=true;
+      if(controller.signal.aborted){progress.hidden=true;status.textContent='أُوقفت القراءة.';}
+      if(activeReading===controller)activeReading=null;
+    }
   });
+  return wrap('registration-list',scan,preview);
 }
 let tab='sources';
 async function subject(item){
@@ -276,7 +424,7 @@ async function subject(item){
   let last='';
   const items=[];let count=0;const dayCounts={};for(const d of content.sources){const k=date(d.created);dayCounts[k]=(dayCounts[k]||0)+1;}
   for(const d of content.sources){const day=date(d.created);if(day!==last){items.push(el('h3',day));last=day;count=dayCounts[day];}items.push(button('مصدر '+number.format(count--)+' · '+d.title+(owner&&d.added_by?' · '+d.added_by:''),()=>go('source',d),'source-item'));}
-  const add=el('details','','add-source');add.append(el('summary','＋ إضافة صورة مصدر'),sourceForm());
+  const add=el('details','','add-source');add.append(el('summary','＋ إضافة صورة مصدر'),sourceForm(s));
   return [hero(s.name,s.page?'وصل الصف إلى صفحة '+number.format(s.page):''),controls,el('h2','مصادر المادة','section-title'),offline&&locked?button('فتح مصادري المحفوظة',()=>go('unlock')):add,...items,!items.length&&el('p',offline&&locked?'سجّل الدخول لعرض مصادرك.':'لا توجد مصادر لهذه المادة بعد.','empty-state'),owner&&form('تقدّم الصف',[field('رقم الصفحة','page','number',s.page||'')],'حفظ الصفحة',async d=>{await rpc('progress',{subject:s.id,page:Number(d.page)});await go('subject',s);})];
 }
 async function source(item){const record=await rpc('source',{id:item.id});const img=el('img');img.src=record.image instanceof Blob?(previewUrl=URL.createObjectURL(record.image)):record.image;img.alt='صورة المصدر';

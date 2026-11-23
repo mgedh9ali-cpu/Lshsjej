@@ -37,6 +37,9 @@ final class RoomStore {
         // Keep existing classroom databases intact while enabling activity and source attribution.
         if(!hasColumn("accounts","last_seen"))db.execSQL("ALTER TABLE accounts ADD COLUMN last_seen INTEGER");
         if(!hasColumn("sources","added_by"))db.execSQL("ALTER TABLE sources ADD COLUMN added_by TEXT");
+        if(!hasColumn("feedback","registration_id"))db.execSQL("ALTER TABLE feedback ADD COLUMN registration_id TEXT");
+        if(!hasColumn("feedback","request_id"))db.execSQL("ALTER TABLE feedback ADD COLUMN request_id TEXT");
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS feedback_request ON feedback(registration_id,request_id)");
         for(String subject:new String[]{"الفيزياء","الكيمياء","العلوم","الإنجليزي","الرياضيات"})
             db.execSQL("INSERT OR IGNORE INTO subjects(name) VALUES(?)",new Object[]{subject});
     }
@@ -178,6 +181,21 @@ final class RoomStore {
         String op=check(p,"op",40);
         boolean first=rows("SELECT 1 FROM accounts WHERE owner=1").length()==0;
         if(op.equals("status"))return obj("setup",owner&&first);
+        if(op.equals("localFeedback")||op.equals("localSuggest")){
+            if(owner||first)throw new Exception("لوحة المالك غير متاحة.");
+            String registrationId=check(p,"id",24);
+            JSONObject registered=rows("SELECT name FROM local_registrations WHERE id=?",registrationId).optJSONObject(0);
+            if(registered==null)throw new Exception("لم يصل تسجيلك إلى لوحة المالك بعد. حاول مجددًا.");
+            if(op.equals("localSuggest")){
+                String requestId=check(p,"requestId",40);
+                if(!requestId.matches("[A-Za-z0-9_-]{24,40}"))throw new Exception("تعذّر التحقق من الطلب.");
+                rate("local-suggest:"+registrationId,12,600000);
+                db.execSQL("INSERT OR IGNORE INTO feedback(name,body,created,registration_id,request_id) VALUES(?,?,?,?,?)",
+                    new Object[]{registered.getString("name"),check(p,"body",2000),System.currentTimeMillis(),registrationId,requestId});
+            }
+            rate("local-feedback:"+registrationId,60,60000);
+            return obj("entries",rows("SELECT body,reply,created FROM feedback WHERE registration_id=? ORDER BY id DESC LIMIT 30",registrationId));
+        }
         if(op.equals("localNotices")){
             if(owner||first)throw new Exception("لوحة المالك غير متاحة.");
             String registrationId=check(p,"id",40);

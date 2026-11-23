@@ -181,10 +181,27 @@ public final class RoomActivity extends Activity {
 
     public final class Bridge{
         @JavascriptInterface public void request(int id,String raw){
+            JSONObject input;
+            try{input=new JSONObject(raw);}catch(JSONException error){return;}
+            String operation=input.optString("op");
+            if(!owner&&(operation.equals("studentFeedback")||operation.equals("studentSuggest"))){
+                registrationTask.execute(()->{
+                    try{
+                        SharedPreferences local=localData();
+                        if(!local.getBoolean("remembered",false))throw new Exception("سجّل الدخول لإرسال الاقتراحات.");
+                        String body=operation.equals("studentSuggest")?RoomStore.check(input,"body",2000):null;
+                        JSONObject result=registration.feedback(local.getString("registrationId",""),local.getString("registeredOwner",""),body,input.optString("requestId"));
+                        finishRequest(id,RoomStore.obj("value",result));
+                    }catch(Exception error){
+                        try{finishRequest(id,RoomStore.obj("error",RoomLink.safe(error)));}catch(Exception ignored){}
+                    }
+                });
+                return;
+            }
             tasks.execute(()->{
                 JSONObject result;
                 try{
-                    JSONObject p=new JSONObject(raw);String op=p.getString("op");
+                    JSONObject p=input;String op=operation;
                     Object value;
                     if(op.equals("boot")){
                         SharedPreferences local=localData();
@@ -253,10 +270,13 @@ public final class RoomActivity extends Activity {
                     }
                     try{result=RoomStore.obj("error",RoomLink.safe(e));}catch(Exception impossible){return;}
                 }
-                final String js="window.complete("+id+","+JSONObject.quote(result.toString())+")";
-                runOnUiThread(()->{if(!isDestroyed())web.evaluateJavascript(js,null);});
+                finishRequest(id,result);
             });
         }
+    }
+    private void finishRequest(int id,JSONObject result){
+        String js="window.complete("+id+","+JSONObject.quote(result.toString())+")";
+        runOnUiThread(()->{if(!isDestroyed())web.evaluateJavascript(js,null);});
     }
     private void noticeBackup(boolean success,String message){
         if(web==null||isDestroyed())return;

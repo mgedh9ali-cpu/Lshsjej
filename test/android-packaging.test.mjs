@@ -17,8 +17,8 @@ test('ships separate student and owner launchers without the hosted web app', ()
     const source = read('android/' + manifest);
     assert.ok(source.includes('package="' + id + '"'));
     assert.ok(source.includes('android:name="' + activity + '"'));
-    assert.match(source, /android:versionCode="16"/);
-    assert.match(source, /android:versionName="0\.7\.3"/);
+    assert.match(source, /android:versionCode="17"/);
+    assert.match(source, /android:versionName="0\.7\.4"/);
     assert.match(source, /android:usesCleartextTraffic="false"/);
     assert.doesNotMatch(source, /android.intent.category.BROWSABLE/);
   }
@@ -71,7 +71,7 @@ test('the bottom bar opens role-specific pages and keeps Materials selected insi
     };
     runInNewContext(script.slice(start, end) + '\nnavigation();', globals);
     assert.deepEqual(Array.from(nav.children, item => item.dataset.page),
-      owner ? ['home', 'feed', 'feedback', 'accounts', 'settings'] : ['home', 'feed', 'settings']);
+      owner ? ['home', 'feed', 'feedback', 'accounts', 'settings'] : ['home', 'feed', 'feedback', 'settings']);
     assert.equal(nav.children[0].attrs['aria-current'], 'page');
     nav.children.at(-1).click();
     nav.children[1].click();
@@ -104,6 +104,35 @@ test('the student inbox keeps received notices visible offline', async () => {
   assert.match(list.children[0], /المحفوظة على الهاتف/);
   assert.deepEqual(Array.from(list.children[1]), ['0', notice.title, notice.body]);
   assert.deepEqual(requests, [['studentNotices', true], ['studentNotices', false]]);
+});
+
+test('OCR emits engine progress and reloads the image for a low-confidence retry', async () => {
+  const statuses = [], reads = [], languages = [];
+  let report;
+  let mode;
+  const api = {
+    Init(_data, language) { languages.push(language); return 0; },
+    SetPageSegMode(value) { mode = value; },
+    SetImageFile() { reads.push(mode); return 0; },
+    GetUTF8Text() { report(40); return mode === 3 ? 'نص' : 'نص عربي واضح'; },
+    MeanTextConf() { return mode === 3 ? 40 : 85; },
+    Clear() {},
+  };
+  const env = {
+    onmessage: null, importScripts() {}, postMessage: value => statuses.push(value),
+    atob, models: { ara: '' }, ArrayBuffer, Uint8Array,
+    TesseractCore: async options => {
+      report = options.TesseractProgress;
+      return { FS: { writeFile() {} }, TessBaseAPI: function () { return api; } };
+    },
+  };
+  runInNewContext(read('android/offline/ocr-worker.js'), env);
+  await env.onmessage({ data: { bytes: new ArrayBuffer(2), language: 'ara' } });
+  assert.deepEqual(languages, ['ara']);
+  assert.deepEqual(reads, [3, 6]);
+  assert.ok(statuses.some(value => value.stage === 'recognize' && value.percent === 40));
+  assert.ok(statuses.some(value => value.stage === 'retry'));
+  assert.equal(statuses.at(-1).text, 'نص عربي واضح');
 });
 
 test('the packaged offline catalog contains valid Arabic subject data', () => {

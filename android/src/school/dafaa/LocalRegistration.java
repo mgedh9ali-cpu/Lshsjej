@@ -122,6 +122,17 @@ final class LocalRegistration {
         return request(endpoint, RoomStore.obj("op", "localNotices", "id", id)).optJSONObject("value");
     }
 
+    JSONObject feedback(String id, String pinnedOwner, String body, String requestId) throws Exception {
+        if (pinnedOwner.isEmpty()) throw new Exception("انتظر وصول تسجيلك إلى لوحة المالك.");
+        Endpoint endpoint = discover(pinnedOwner);
+        if (endpoint == null) throw new Exception("افتح لوحة المالك على نفس شبكة الواي فاي.");
+        JSONObject payload = body == null ? RoomStore.obj("op", "localFeedback", "id", id)
+            : RoomStore.obj("op", "localSuggest", "id", id, "body", body, "requestId", requestId);
+        JSONObject response = request(endpoint, payload);
+        if (response.has("error")) throw new Exception(response.getString("error"));
+        return response.getJSONObject("value");
+    }
+
     private JSONObject request(Endpoint endpoint, JSONObject request) throws Exception {
         try { return RoomLink.call(endpoint.host, endpoint.fingerprint, request); }
         catch (Exception failure) { cachedEndpoint = null; throw failure; }
