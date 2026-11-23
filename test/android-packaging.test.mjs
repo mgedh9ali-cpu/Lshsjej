@@ -114,7 +114,8 @@ test('OCR emits engine progress and reloads the image for a low-confidence retry
     Init(_data, language) { languages.push(language); return 0; },
     SetPageSegMode(value) { mode = value; },
     SetImageFile() { reads.push(mode); return 0; },
-    GetUTF8Text() { report(40); return mode === 3 ? 'نص' : 'نص عربي واضح'; },
+    Recognize() { report(58); return 0; },
+    GetUTF8Text() { return mode === 3 ? 'نص' : 'نص عربي واضح'; },
     MeanTextConf() { return mode === 3 ? 40 : 85; },
     Clear() {},
   };

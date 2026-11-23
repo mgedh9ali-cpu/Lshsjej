@@ -2,7 +2,9 @@ importScripts('core.js', 'models.js');
 async function initialize(language, progress) {
   progress('engine', 0);
   const module = await TesseractCore({
-    TesseractProgress(percent) { progress('recognize', percent); },
+    TesseractProgress(percent) {
+      progress('recognize', Math.max(0, Math.min(100, (percent - 30) * 100 / 70)));
+    },
   });
   progress('models', 0);
   for (const lang of language.split('+')) {
@@ -27,6 +29,7 @@ onmessage = async event => {
     function read(mode) {
       api.SetPageSegMode(mode);
       if (api.SetImageFile(1,0)) throw Error();
+      if (api.Recognize(null)) throw Error();
       const text = (api.GetUTF8Text() || '').trim();
       return {text,confidence:api.MeanTextConf()};
     }
