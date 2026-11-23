@@ -74,9 +74,14 @@ public final class MainActivity extends Activity {
                 return;
             } catch (Exception ignored) {}
         }
-        if (origin.isEmpty()) setup("");
+        if (origin.isEmpty() && !getSharedPreferences("room_mode",MODE_PRIVATE).getBoolean("prefer_offline",false) && state == null) {
+            setup("");
+            openClassroom();
+        } else if (origin.isEmpty()) setup("");
         else openStudentApp();
     }
+
+    private void openClassroom() { startActivity(new Intent(this,RoomActivity.class)); }
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
@@ -230,6 +235,7 @@ public final class MainActivity extends Activity {
             });
             return;
         }
+        section(card, "دخول الصف برمز المالك", v -> openClassroom());
         add(card, text(first ? "إنشاء حساب محلي" : "تسجيل الدخول", 22, INK, true), 0);
         EditText name = field(card, "الاسم", InputType.TYPE_TEXT_VARIATION_PERSON_NAME);
         EditText secret = field(card, "كلمة السر", InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -321,26 +327,54 @@ public final class MainActivity extends Activity {
         LinearLayout screen = panel();
         banner(screen, "موادّي الدراسية", "قوم دروس · " + name);
         String[] subjects = localSubjects();
+        LinearLayout toolbar = new LinearLayout(this);
+        add(screen,toolbar,12);
+        Button menu = primary("☰  القائمة");
+        toolbar.addView(menu);
+        menu.setOnClickListener(v -> {
+            android.widget.PopupMenu drawer = new android.widget.PopupMenu(this,menu);
+            String[] items={"حساب الصف","الأخبار والإشعارات","اقتراحاتي","الإعدادات"};
+            for(int i=0;i<items.length;i++)drawer.getMenu().add(0,i,i,items[i]);
+            drawer.setOnMenuItemClickListener(entry->{
+                switch(entry.getItemId()){case 0:openClassroom();break;case 1:showLocalUpdates(name);break;case 2:showLocalSuggestion(name);break;default:showSettings(name);}
+                return true;
+            });
+            drawer.show();
+        });
         LinearLayout library = card(screen);
+        EditText search = field(library,"بحث في المواد",InputType.TYPE_CLASS_TEXT);
+        java.util.List<View> cards = new java.util.ArrayList<>();
         for (String subject : subjects) {
             Button item = new Button(this);
-            item.setText(subject + "    ·    المصادر والاختبارات");
+            item.setText(subject + "\nالمصادر والاختبارات");
+            item.setAllCaps(false);
+            item.setMinHeight(dp(76));
             item.setTextColor(INK);
             item.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL);
             item.setPadding(dp(16),0,dp(16),0);
             item.setBackground(surface(FIELD,12));
+            item.setTag(subject);
+            cards.add(item);
             add(library,item,7);
             item.setOnClickListener(v -> openSources(name, subject));
         }
-        section(screen, "الأخبار والإشعارات", v -> showLocalUpdates(name));
-        section(screen, "اقتراحاتي", v -> showLocalSuggestion(name));
-        section(screen, "الإعدادات", v -> {
-            LinearLayout options = card(localSection(name,"الإعدادات"));
-            add(options,text(name,20,INK,true),0);
-            section(options,"ملاحظاتي المحفوظة", w -> showLocalNotes(name,0));
-            section(options,"ربط حساب الصف", w -> configureClass(options));
-            section(options,"تسجيل الخروج", w -> setup(""));
+        search.addTextChangedListener(new android.text.TextWatcher(){
+            public void beforeTextChanged(CharSequence s,int start,int count,int after){}
+            public void afterTextChanged(android.text.Editable s){}
+            public void onTextChanged(CharSequence s,int start,int before,int count){
+                for(View item:cards)item.setVisibility(item.getTag().toString().contains(s.toString().trim())?View.VISIBLE:View.GONE);
+            }
         });
+        section(screen,"فتح الصف المشترك",v -> openClassroom());
+    }
+
+    private void showSettings(String name){
+        LinearLayout options = card(localSection(name,"الإعدادات"));
+        add(options,text(name,20,INK,true),0);
+        section(options,"ملاحظاتي المحفوظة",w -> showLocalNotes(name,0));
+        section(options,"الصف على شبكة الواي فاي",w -> openClassroom());
+        section(options,"ربط بعنوان المدرسة",w -> configureClass(options));
+        section(options,"تسجيل الخروج",w -> setup(""));
     }
 
     private void connect(String address) {

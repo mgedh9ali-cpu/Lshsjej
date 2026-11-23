@@ -6,7 +6,9 @@ jdk="${JAVA_HOME:?Set JAVA_HOME to a JDK}"
 export JAVA_HOME="$jdk"
 bt="$sdk/build-tools/${SCHOOL_BUILD_TOOLS:-35.0.0}"
 platform="$sdk/platforms/${SCHOOL_ANDROID_PLATFORM:-android-36}/android.jar"
-output="${1:-$root/dist/QumDorous-0.5.0.apk}"
+output="${1:-$root/dist/QumDorous-0.6.0.apk}"
+manifest="$root/android/AndroidManifest.xml"
+if [[ "${2:-student}" == "owner" ]]; then manifest="$root/android/OwnerManifest.xml"; fi
 keystore="${SCHOOL_KEYSTORE:?Set SCHOOL_KEYSTORE}"
 alias="${SCHOOL_KEY_ALIAS:-dafaa}"
 : "${SCHOOL_KEY_PASSWORD:?Set SCHOOL_KEY_PASSWORD}"
@@ -16,11 +18,13 @@ trap 'rm -rf "$temp"' EXIT
 mkdir -p "$temp/classes" "$temp/dex" "$temp/assets" "$(dirname "$output")"
 "$bt/aapt2" compile --dir "$root/android/res" -o "$temp/resources.zip"
 printf '%s\n' "${STUDENT_ORIGIN:-}" > "$temp/assets/student-origin.txt"
-cp "$root"/android/offline/* "$temp/assets/"
+cp "$root"/android/offline/* "$root"/android/room/* "$temp/assets/"
+cp "$root/web/fonts/cairo-arabic-wght-normal.woff2" "$temp/assets/cairo.woff2"
+cp "$root/web/fonts/Cairo-OFL.txt" "$temp/assets/Cairo-OFL.txt"
 node "$root/scripts/prepare-ocr.mjs" "$temp/assets"
 node "$root/scripts/build-student-db.mjs" "$temp/assets/student.sqlite"
-"$bt/aapt2" link -A "$temp/assets" -I "$platform" --manifest "$root/android/AndroidManifest.xml" -o "$temp/base.apk" "$temp/resources.zip"
-"$jdk/bin/javac" --release 8 -cp "$platform" -d "$temp/classes" "$root/android/src/school/dafaa/MainActivity.java"
+"$bt/aapt2" link -A "$temp/assets" -I "$platform" --manifest "$manifest" -o "$temp/base.apk" "$temp/resources.zip"
+"$jdk/bin/javac" --release 8 -cp "$platform" -d "$temp/classes" "$root"/android/src/school/dafaa/*.java
 "$jdk/bin/jar" cf "$temp/classes.jar" -C "$temp/classes" .
 "$bt/d8" --min-api 23 --lib "$platform" --output "$temp/dex" "$temp/classes.jar"
 (cd "$temp/dex" && "$bt/aapt" add "$temp/base.apk" classes.dex)
