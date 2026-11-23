@@ -50,7 +50,7 @@ test('separate interfaces, owner approvals, private results, notices and image d
     const [data] = await Promise.race([once(server.stdout, 'data'), exited.then(() => { throw Error('Server exited'); })]);
     logs += data;
   }
-  for (const [port, title] of [[studentPort, 'قو مدرس'], [adminPort, 'لوحة إدارة قو مدرس']]) {
+  for (const [port, title] of [[studentPort, 'قوم دروس'], [adminPort, 'لوحة إدارة قوم دروس']]) {
     const response = await fetch('http://127.0.0.1:' + port + '/');
     assert.equal(response.status, 200);
     assert.match(await response.text(), new RegExp('<title>' + title + '</title>'));

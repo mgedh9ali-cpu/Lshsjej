@@ -56,7 +56,7 @@ export function login(area, ready) {
   app.replaceChildren(el('div', { class: 'login-layout' },
     el('section', { class: 'hero login-hero' },
       area === 'student' && el('img', { class: 'study-illustration', src: '/study.webp', width: 780, height: 520, alt: '' }), el('img', { src: '/icon-192.png', alt: '', width: 88, height: 88 }),
-      el('h1', {}, area === 'admin' ? 'لوحة إدارة قو مدرس' : 'قو مدرس'),
+      el('h1', {}, area === 'admin' ? 'لوحة إدارة قوم دروس' : 'قوم دروس'),
       el('p', {}, area === 'admin' ? 'أدر المحتوى والحسابات من مكان واحد.' : 'موادك ومستنداتك واختباراتك في مكان واحد.')),
     form([el('h2', {}, 'تسجيل الدخول'),
       line('اسم المستخدم', input('username', { autocomplete: 'username', required: true, dir: 'ltr' })),

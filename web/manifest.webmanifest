@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "قو مدرس",
-  "short_name": "قو مدرس",
+  "name": "قوم دروس",
+  "short_name": "قوم دروس",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

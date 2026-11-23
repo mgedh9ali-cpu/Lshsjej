@@ -89,7 +89,7 @@ public final class MainActivity extends Activity {
         logo.setImageResource(getResources().getIdentifier("school_logo", "drawable", getPackageName()));
         card.addView(logo, new LinearLayout.LayoutParams(dp(72), dp(72)));
         TextView title = new TextView(this);
-        title.setText("قو مدرس");
+        title.setText("قوم دروس");
         title.setTextSize(30);
         title.setTextColor(Color.rgb(36,21,77));
         card.addView(title);
@@ -182,7 +182,7 @@ public final class MainActivity extends Activity {
         LinearLayout root = layout();
         web = new WebView(this);
         TextView loading = new TextView(this);
-        loading.setText("جارٍ فتح قو مدرس…");
+        loading.setText("جارٍ فتح قوم دروس…");
         loading.setPadding(dp(16), dp(12), dp(16), dp(8));
         loading.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         root.addView(loading);
