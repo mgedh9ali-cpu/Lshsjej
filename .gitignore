@@ -1,3 +1,9 @@
 .env
 data/
 node_modules/
+dist/
+deploy/backups/
+deploy/fonts/
+*.jks
+*.keystore
+.signing/

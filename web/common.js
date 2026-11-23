@@ -9,7 +9,8 @@ export function el(tag, props = {}, ...children) {
   element.append(...children.flat().filter(child => child != null && child !== false));
   return element;
 }
-export const button = (label, click, className = 'secondary') => el('button', { type: 'button', class: className, onclick: click }, label);
+export const button = (label, click, className = 'secondary', attrs = {}) =>
+  el('button', { type: 'button', class: className, ...attrs, onclick: click }, label);
 export const heading = (title, subtitle) => el('section', { class: 'hero' }, el('h1', {}, title), subtitle && el('p', {}, subtitle));
 export const line = (label, control) => el('label', { class: 'field' }, label, control);
 export const input = (name, props = {}) => el('input', { name, ...props });
@@ -30,10 +31,11 @@ export function form(fields, label, submit) {
   return el('form', { class: 'card form', onsubmit: async event => {
     event.preventDefault();
     send.disabled = true;
+    send.textContent = 'جارٍ التنفيذ…';
     message.textContent = '';
     try { await submit(Object.fromEntries(new FormData(event.currentTarget)), message, event.currentTarget); }
     catch (error) { message.textContent = error.message; }
-    finally { send.disabled = false; }
+    finally { send.disabled = false; send.textContent = label; }
   } }, fields, send, message);
 }
 export function errorView(error) {

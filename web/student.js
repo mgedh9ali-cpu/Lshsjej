@@ -18,7 +18,7 @@ function noticeList(items) {
 const home = display(async () => {
   const subjects = await api('/subjects');
   return [heading('المواد الدراسية', 'اختر مادة لتفتح المستندات والاختبارات.'), el('div', { class: 'grid' }, subjects.map((item, index) =>
-    button(['⚡', '◇', '✿', 'Aa', '∑'][index % 5] + '  ' + item.name, subjectPage(item), 'card subject')))];
+    button([el('span', { class: 'subject-icon', 'aria-hidden': 'true' }, ['⚡', '◇', '✿', 'Aa', '∑'][index % 5]), item.name], subjectPage(item), 'card subject')))];
 });
 const news = display(async () => [heading('الأخبار والتذكيرات'), noticeList(await api('/notices'))]);
 const results = display(async () => {
@@ -32,8 +32,9 @@ function subjectPage(subject, tab = 'documents') {
     const query = '?subject=' + subject.id;
     const items = await api('/' + tab + query);
     notices = await api('/notices');
-    const controls = el('div', { class: 'actions' }, button('المستندات', subjectPage(subject), tab === 'documents' ? 'primary' : 'secondary'),
-      button('الاختبارات', subjectPage(subject, 'quizzes'), tab === 'quizzes' ? 'primary' : 'secondary'));
+    const controls = el('div', { class: 'actions', role: 'group', 'aria-label': 'أقسام المادة' },
+      button('المستندات', subjectPage(subject), 'secondary', { 'aria-pressed': String(tab === 'documents') }),
+      button('الاختبارات', subjectPage(subject, 'quizzes'), 'secondary', { 'aria-pressed': String(tab === 'quizzes') }));
     const content = [button('← المواد', home), heading(subject.name), controls];
     if (tab === 'quizzes') {
       content.push(items.length ? el('div', { class: 'stack' }, items.map(item => button(item.title, quizPage(subject, item.id), 'card list-button'))) : empty('ما في اختبارات منشورة لهذه المادة.'));

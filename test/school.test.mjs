@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 async function freePort() {
   const socket = createServer().listen(0, '127.0.0.1');
@@ -17,6 +18,7 @@ async function freePort() {
 test('separate interfaces, owner approvals, private results, notices and image deduplication', async t => {
   const tmp = await mkdtemp(join(tmpdir(), 'school-test-'));
   const password = 'temporary-password';
+  const source = join(tmp, 'test.sqlite');
   let aiCalls = 0;
   const mock = createServer(async (req, res) => {
     let raw = '';
@@ -32,7 +34,7 @@ test('separate interfaces, owner approvals, private results, notices and image d
   let adminPort = await freePort();
   while (adminPort === studentPort) adminPort = await freePort();
   const server = spawn(process.execPath, ['server.mjs'], { env: {
-    ...process.env, SCHOOL_DB: join(tmp, 'test.sqlite'), OWNER_USERNAME: 'owner', OWNER_PASSWORD: password,
+    ...process.env, SCHOOL_DB: source, OWNER_USERNAME: 'owner', OWNER_PASSWORD: password,
     OWNER_TOTP_HEX: '', SCHOOL_SECURE: '0', SCHOOL_HOST: '127.0.0.1', STUDENT_PORT: String(studentPort), ADMIN_PORT: String(adminPort),
     SCHOOL_AI_URL: 'http://127.0.0.1:' + mock.address().port, SCHOOL_AI_KEY: 'mock', SCHOOL_AI_MODEL: 'mock',
   }, stdio: ['ignore', 'pipe', 'inherit'] });
@@ -48,6 +50,18 @@ test('separate interfaces, owner approvals, private results, notices and image d
     const [data] = await Promise.race([once(server.stdout, 'data'), exited.then(() => { throw Error('Server exited'); })]);
     logs += data;
   }
+  for (const [port, title] of [[studentPort, 'منصة الدفعة'], [adminPort, 'لوحة إدارة الدفعة']]) {
+    const response = await fetch('http://127.0.0.1:' + port + '/');
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), new RegExp('<title>' + title + '</title>'));
+    for (const asset of ['/styles.css', '/app.js', '/common.js']) {
+      const file = await fetch('http://127.0.0.1:' + port + asset);
+      assert.equal(file.status, 200);
+      assert.ok((await file.text()).length > 0);
+    }
+  }
+  assert.equal(await (await fetch('http://127.0.0.1:' + studentPort + '/student-app')).text(), 'school-student-v1');
+  assert.equal((await fetch('http://127.0.0.1:' + adminPort + '/student-app')).status, 404);
   const request = async (port, path, data, session) => {
     const response = await fetch('http://127.0.0.1:' + port + '/api' + path, {
       method: data === undefined ? 'GET' : 'POST',
@@ -105,4 +119,22 @@ test('separate interfaces, owner approvals, private results, notices and image d
   assert.equal((await completed(semantic.body.id)).document, published.document);
   assert.equal(aiCalls, 2);
   assert.equal((await student('/documents?subject=' + subject)).body.length, 1);
+  const group = Array.from({ length: 30 }, (_, index) => ({ username: 'load' + index, name: 'طالب ' + index, password }));
+  assert.equal((await admin('/accounts', { accounts: group })).status, 200);
+  const start = performance.now();
+  const sessions = await Promise.all(group.map(account => request(studentPort, '/login', account)));
+  assert.ok(sessions.every(session => session.status === 200 && session.cookie));
+  const profiles = await Promise.all(sessions.map(session => student('/me', undefined, session.cookie)));
+  assert.ok(profiles.every((profile, index) => profile.body.username === group[index].username));
+  t.diagnostic('30 concurrent logins + 30 profile requests: ' + Math.round(performance.now() - start) + ' ms');
+  const backup = join(tmp, 'restore.sqlite');
+  const copied = spawnSync(process.execPath, ['scripts/backup.mjs', backup], { env: { ...process.env, SCHOOL_DB: source } });
+  assert.equal(copied.status, 0, copied.stderr.toString());
+  const restored = new DatabaseSync(backup, { readOnly: true });
+  try {
+    assert.equal(restored.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    assert.equal(restored.prepare("SELECT count(*) AS total FROM users WHERE role='student'").get().total, 32);
+    assert.equal(restored.prepare('SELECT count(*) AS total FROM documents').get().total, 1);
+    assert.equal(restored.prepare('SELECT count(*) AS total FROM attempts').get().total, 1);
+  } finally { restored.close(); }
 });

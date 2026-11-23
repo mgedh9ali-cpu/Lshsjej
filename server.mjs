@@ -1,8 +1,9 @@
 import { createServer } from 'node:http';
-import { randomBytes, scryptSync, timingSafeEqual, createHash, createHmac } from 'node:crypto';
+import { randomBytes, scrypt, scryptSync, timingSafeEqual, createHash, createHmac } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
 import { studentIcons } from './web/icons.mjs';
 
 const env = process.env;
@@ -20,6 +21,10 @@ CREATE INDEX IF NOT EXISTS submission_image ON submissions(subject,digest,state)
 CREATE TABLE IF NOT EXISTS quizzes(id INTEGER PRIMARY KEY,subject INTEGER,title TEXT,questions TEXT,published INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS attempts(id INTEGER PRIMARY KEY,user INTEGER,quiz INTEGER,score INTEGER,total INTEGER,created INTEGER);
 CREATE TABLE IF NOT EXISTS notices(id INTEGER PRIMARY KEY,kind TEXT,title TEXT,body TEXT,subject INTEGER,visible INTEGER,published INTEGER);
+CREATE INDEX IF NOT EXISTS attempts_learner ON attempts(user,id);
+CREATE INDEX IF NOT EXISTS quizzes_subject ON quizzes(subject,published,id);
+CREATE INDEX IF NOT EXISTS submissions_learner ON submissions(user,subject,id);
+CREATE INDEX IF NOT EXISTS notices_visibility ON notices(published,visible);
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,user INTEGER,action TEXT,details TEXT,created INTEGER);
 `);
 const all = (sql, ...args) => db.prepare(sql).all(...args);
@@ -35,6 +40,12 @@ function passwordHash(value, salt = randomBytes(16).toString('hex')) {
   return salt + ':' + scryptSync(value, salt, 64).toString('hex');
 }
 const equal = (left, right) => left.length === right.length && timingSafeEqual(Buffer.from(left), Buffer.from(right));
+const derive = promisify(scrypt);
+async function matchesPassword(value, stored) {
+  const [salt, digest] = stored.split(':');
+  const candidate = await derive(value, salt, 64);
+  return timingSafeEqual(candidate, Buffer.from(digest, 'hex'));
+}
 const dummyPassword = passwordHash(randomBytes(24).toString('hex'));
 const ownerSecret = env.OWNER_TOTP_HEX || '';
 if (ownerSecret && !/^(?:[a-f0-9]{2}){20,}$/i.test(ownerSecret)) throw Error('Invalid OWNER_TOTP_HEX');
@@ -174,6 +185,10 @@ async function processImage(id, subjectId, image) {
         || get('SELECT id FROM documents WHERE subject=? AND topic=?', subjectId, key);
       const document = duplicate?.id ?? Number(run('INSERT INTO documents(subject,title,body,topic,updated) VALUES(?,?,?,?,?)', subjectId, title, body, key, Date.now()).lastInsertRowid);
       run('UPDATE submissions SET state=?,document=? WHERE id=?', duplicate ? 'duplicate' : 'published', document, id);
+      if (!duplicate) {
+        const author = get('SELECT user AS id FROM submissions WHERE id=?', id);
+        audit(author, 'نشر مستند تلقائيًا', title);
+      }
     });
   } catch {
     run("UPDATE submissions SET state='failed' WHERE id=?", id);
@@ -206,8 +221,9 @@ async function api(req, res, area, route, params) {
     limit('login:' + area + ':' + name, 10, 600000);
     const user = get('SELECT * FROM users WHERE username=? AND active=1', name);
     const stored = user?.password || dummyPassword;
-    const matched = equal(passwordHash(checkPassword(login.password), stored.split(':')[0]), stored);
-    if (!matched || !user || (area === 'student') !== (user.role === 'student') ||
+    const matched = await matchesPassword(checkPassword(login.password), stored);
+    const current = user && get('SELECT password,active FROM users WHERE id=?', user.id);
+    if (!matched || !current?.active || current.password !== stored || (area === 'student') !== (user.role === 'student') ||
         (user.role === 'owner' && !verifyTotp(login.code || ''))) fail(401, 'بيانات الدخول غير صحيحة.');
     const token = randomBytes(32).toString('hex');
     const age = area === 'student' ? 86400 : 14400;
@@ -411,6 +427,21 @@ function serve(area, port) {
         const data = await api(req, res, area, url.pathname.slice(4), url.searchParams);
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
         res.end(JSON.stringify(data));
+        return;
+      }
+      if (req.method === 'GET' && area === 'student' && url.pathname === '/student-app') {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('school-student-v1');
+        return;
+      }
+      const font = /^\/fonts\/thmanyahsans-(Regular|Bold)\.woff2$/.exec(url.pathname);
+      if (req.method === 'GET' && font && env.SCHOOL_FONT_DIR) {
+        let bytes;
+        try { bytes = readFileSync(join(env.SCHOOL_FONT_DIR, 'thmanyahsans-' + font[1] + '.woff2')); }
+        catch (error) { if (error.code === 'ENOENT') fail(404, 'ملف الخط غير موجود.'); throw error; }
+        res.setHeader('Content-Type', 'font/woff2');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.end(bytes);
         return;
       }
       const icon = area === 'student' && Object.hasOwn(studentIcons, url.pathname) && studentIcons[url.pathname];

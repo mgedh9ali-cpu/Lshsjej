@@ -1,0 +1,6 @@
+{$STUDENT_ORIGIN} {
+  reverse_proxy school:{$STUDENT_PORT:3000}
+}
+{$ADMIN_ORIGIN} {
+  reverse_proxy school:{$ADMIN_PORT:3001}
+}
