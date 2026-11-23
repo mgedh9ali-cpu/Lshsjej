@@ -3,6 +3,19 @@ package school.dafaa;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.content.SharedPreferences;
+import android.text.method.PasswordTransformationMethod;
+import android.util.Base64;
+import android.widget.ScrollView;
+import android.widget.Spinner;
+import android.widget.ArrayAdapter;
+import android.widget.AdapterView;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.PBEKeySpec;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
@@ -29,6 +42,11 @@ public final class MainActivity extends Activity {
     private static final int PICK_IMAGE = 23;
     private String origin;
     private WebView web;
+    private boolean localHomeOpen;
+    private static final int INK = 0xff211740;
+    private static final int PURPLE = 0xff5834ae;
+    private static final int MUTED = 0xff5e526f;
+    private static final int FIELD = 0xfff7f4ff;
     private ValueCallback<Uri[]> chooser;
 
     @Override public void onCreate(Bundle state) {
@@ -82,45 +100,203 @@ public final class MainActivity extends Activity {
         return root;
     }
 
+    private GradientDrawable surface(int color, int radius) {
+        GradientDrawable shape = new GradientDrawable();
+        shape.setColor(color);
+        shape.setCornerRadius(dp(radius));
+        return shape;
+    }
+
+    private TextView text(String value, int size, int color, boolean bold) {
+        TextView view = new TextView(this);
+        view.setText(value);
+        view.setTextSize(size);
+        view.setTextColor(color);
+        if (bold) view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        return view;
+    }
+
+    private LinearLayout panel() {
+        LinearLayout root = layout();
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, -1));
+        LinearLayout column = new LinearLayout(this);
+        column.setOrientation(LinearLayout.VERTICAL);
+        column.setPadding(dp(22), dp(24), dp(22), dp(24));
+        scroll.addView(column);
+        return column;
+    }
+
+    private void add(LinearLayout parent, View child, int top) {
+        LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, -2);
+        size.topMargin = dp(top);
+        parent.addView(child, size);
+    }
+
+    private LinearLayout card(LinearLayout parent) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(18), dp(16), dp(18), dp(18));
+        card.setBackground(surface(Color.WHITE, 24));
+        card.setElevation(dp(2));
+        add(parent, card, 18);
+        return card;
+    }
+
+    private void banner(LinearLayout parent, String title, String subtitle) {
+        LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.VERTICAL);
+        hero.setPadding(dp(22), dp(23), dp(22), dp(23));
+        GradientDrawable background = new GradientDrawable(GradientDrawable.Orientation.TR_BL,
+            new int[]{0xff29164e, 0xff5934a9});
+        background.setCornerRadius(dp(28));
+        hero.setBackground(background);
+        add(hero, text(title, 31, Color.WHITE, true), 0);
+        add(hero, text(subtitle, 15, 0xffa9f6df, false), 7);
+        add(parent, hero, 0);
+    }
+
+    private EditText field(LinearLayout parent, String label, int type) {
+        EditText input = new EditText(this);
+        TextView caption = text(label, 14, INK, true);
+        input.setId(View.generateViewId());
+        caption.setLabelFor(input.getId());
+        add(parent, caption, 12);
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | type);
+        input.setPadding(dp(14), 0, dp(14), 0);
+        input.setMinHeight(dp(54));
+        input.setTextColor(INK);
+        input.setBackground(surface(FIELD, 14));
+        add(parent, input, 5);
+        return input;
+    }
+
+    private Button primary(String label) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setAllCaps(false);
+        button.setTextColor(Color.WHITE);
+        button.setMinHeight(dp(52));
+        button.setBackground(new android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(0x44ffffff), surface(PURPLE, 15), null));
+        return button;
+    }
+
+    private SharedPreferences localData() { return getSharedPreferences("offline_student", MODE_PRIVATE); }
+
+    private static byte[] localHash(char[] password, byte[] salt) throws Exception {
+        PBEKeySpec spec = new PBEKeySpec(password, salt, 210000, 256);
+        try { return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1").generateSecret(spec).getEncoded(); }
+        finally { spec.clearPassword(); java.util.Arrays.fill(password, '\0'); }
+    }
+
     private void setup(String message) {
+        localHomeOpen = false;
         if (web != null) {
             LinearLayout old = (LinearLayout) web.getParent();
             if (old != null) old.removeView(web);
             web.destroy();
             web = null;
         }
-        LinearLayout root = layout();
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(24), dp(32), dp(24), dp(24));
-        root.addView(card);
-        TextView title = new TextView(this);
-        title.setText("قوم دروس");
-        title.setTextSize(30);
-        title.setTextColor(Color.rgb(36,21,77));
-        card.addView(title);
-        EditText name = new EditText(this);
-        name.setHint("الاسم");
-        name.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PERSON_NAME);
-        name.setSingleLine(true);
-        card.addView(name);
-        EditText password = new EditText(this);
-        password.setHint("كلمة السر");
-        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        password.setSingleLine(true);
-        card.addView(password);
-        Button login = new Button(this);
-        login.setText(origin.isEmpty() ? "دخول" : "إعادة المحاولة");
-        login.setMinimumHeight(dp(48));
-        card.addView(login);
-        TextView status = new TextView(this);
+        LinearLayout screen = panel();
+        boolean local = origin.isEmpty();
+        boolean first = local && !localData().contains("hash");
+        banner(screen, "قوم دروس", local ? "مساحتك الدراسية على هذا الهاتف" : "تسجيل الدخول إلى المدرسة");
+        LinearLayout card = card(screen);
+        if (!local) {
+            add(card, text(message, 15, MUTED, false), 0);
+            Button retry = primary("إعادة المحاولة");
+            add(card, retry, 12);
+            retry.setOnClickListener(view -> openStudentApp());
+            return;
+        }
+        add(card, text(first ? "إنشاء حساب محلي" : "تسجيل الدخول", 22, INK, true), 0);
+        EditText name = field(card, "الاسم", InputType.TYPE_TEXT_VARIATION_PERSON_NAME);
+        EditText secret = field(card, "كلمة السر", InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        secret.setTransformationMethod(PasswordTransformationMethod.getInstance());
+        secret.setSaveEnabled(false);
+        if (!first) name.setText(localData().getString("name", ""));
+        Button submit = primary(first ? "إنشاء الحساب" : "دخول");
+        add(card, submit, 18);
+        TextView status = text("", 14, MUTED, false);
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        status.setText(message);
-        card.addView(status);
-        login.setOnClickListener(view -> {
-            if (origin.isEmpty()) status.setText("خادم المدرسة غير متاح بعد.");
-            else openStudentApp();
+        add(card, status, 8);
+        submit.setOnClickListener(view -> {
+            String enteredName = name.getText().toString().trim();
+            int length = secret.length();
+            if (enteredName.isEmpty() || enteredName.length() > 100 || length < 6 || length > 128) {
+                status.setText("اكتب الاسم وكلمة سر من 6 إلى 128 حرفًا أو رقمًا.");
+                return;
+            }
+            char[] password = new char[length];
+            secret.getText().getChars(0, length, password, 0);
+            secret.setText("");
+            submit.setEnabled(false);
+            new Thread(() -> {
+                boolean entered;
+                try { entered = verifyLocal(enteredName, password, first); }
+                catch (Exception error) { entered = false; }
+                final boolean success = entered;
+                runOnUiThread(() -> {
+                    if (isDestroyed() || isFinishing()) return;
+                    if (success) showLocalHome(enteredName);
+                    else {
+                        status.setText(first ? "تعذّر إنشاء الحساب. حاول مجددًا." : "تحقّق من الاسم وكلمة السر.");
+                        status.postDelayed(() -> submit.setEnabled(true), 900);
+                    }
+                });
+            }).start();
         });
+    }
+
+    private synchronized boolean verifyLocal(String name, char[] password, boolean first) throws Exception {
+        SharedPreferences data = localData();
+        if (first && !data.contains("hash")) {
+            byte[] salt = new byte[16];
+            new SecureRandom().nextBytes(salt);
+            return data.edit().putString("name", name).putString("salt", Base64.encodeToString(salt, Base64.NO_WRAP))
+                .putString("hash", Base64.encodeToString(localHash(password, salt), Base64.NO_WRAP)).commit();
+        }
+        byte[] salt = Base64.decode(data.getString("salt", ""), Base64.DEFAULT);
+        byte[] stored = Base64.decode(data.getString("hash", ""), Base64.DEFAULT);
+        return MessageDigest.isEqual(stored, localHash(password, salt)) && name.equals(data.getString("name", ""));
+    }
+
+    private void showLocalHome(String name) {
+        localHomeOpen = true;
+        LinearLayout screen = panel();
+        banner(screen, "أهلًا، " + name, "دفترك الدراسي على هذا الهاتف");
+        LinearLayout card = card(screen);
+        add(card, text("ملاحظات المواد", 22, INK, true), 0);
+        String[] subjects = {"الفيزياء", "الكيمياء", "العلوم", "الإنجليزي", "الرياضيات"};
+        Spinner picker = new Spinner(this);
+        ArrayAdapter<String> choices = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, subjects);
+        picker.setAdapter(choices);
+        add(card, picker, 12);
+        EditText note = field(card, "ملاحظتك", InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        note.setSingleLine(false);
+        note.setMinLines(4);
+        note.setGravity(android.view.Gravity.TOP | android.view.Gravity.START);
+        picker.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                note.setText(localData().getString("note_" + position, ""));
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
+        Button save = primary("حفظ الملاحظة");
+        add(card, save, 14);
+        TextView status = text("", 14, MUTED, false);
+        add(card, status, 7);
+        save.setOnClickListener(view -> {
+            localData().edit().putString("note_" + picker.getSelectedItemPosition(), note.getText().toString()).apply();
+            status.setText("حُفظت على هذا الهاتف.");
+        });
+        Button logout = new Button(this);
+        logout.setText("تسجيل الخروج");
+        add(screen, logout, 12);
+        logout.setOnClickListener(view -> setup(""));
     }
 
     private static String httpsOrigin(String input) throws Exception {
@@ -220,6 +396,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
+        if (localHomeOpen) { setup(""); return; }
         if (web != null && web.canGoBack()) web.goBack();
         else super.onBackPressed();
     }

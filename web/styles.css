@@ -113,3 +113,8 @@ button{transition:background-color .16s,border-color .16s,box-shadow .16s,transf
 .login-hero img.study-illustration{width:100%;height:auto;max-height:15rem;object-fit:cover;object-position:center;border-radius:15px;box-shadow:none}
 @media(max-width:650px){.login-hero img.study-illustration{max-height:9rem}}
 .simple-login{width:min(100%,420px);margin:4vh auto 0}
+.simple-login{width:min(100%,460px);margin:clamp(1rem,7vh,4rem) auto 0}
+.simple-login .form{border-radius:26px;padding:0 1.35rem 1.35rem;overflow:hidden;box-shadow:0 16px 44px #25154916}
+.simple-login h1{margin:0 -1.35rem .5rem;padding:1.2rem 1.35rem;color:white;background:linear-gradient(135deg,#29164e,#5934a9);font-size:1.65rem}
+.simple-login .field{margin-block:.25rem}
+.simple-login .primary{justify-self:stretch;margin-top:.35rem}
