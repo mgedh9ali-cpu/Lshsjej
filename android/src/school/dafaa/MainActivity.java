@@ -21,26 +21,18 @@ import android.os.Bundle;
 import android.text.InputType;
 import android.view.View;
 import android.view.WindowInsets;
-import android.webkit.CookieManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.TextView;
-import java.net.URI;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 
 public final class MainActivity extends Activity {
     private static final int PICK_IMAGE = 23;
-    private String origin;
     private WebView web;
     private String localName;
     private boolean atHome;
@@ -53,32 +45,11 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        origin = "";
-        try (BufferedReader config = new BufferedReader(new InputStreamReader(
-                getAssets().open("student-origin.txt"), StandardCharsets.UTF_8))) {
-            String address = config.readLine();
-            if (address != null && !address.isEmpty()) origin = httpsOrigin(address);
-        } catch (Exception ignored) {}
-        if (origin.isEmpty()) {
-            try { origin = httpsOrigin(getPreferences(MODE_PRIVATE).getString("origin", "")); }
-            catch (Exception ignored) {}
-        }
-        Uri invitation = getIntent().getData();
-        if (invitation != null && "qumdorous".equals(invitation.getScheme()) && "join".equals(invitation.getHost())) {
-            try {
-                final String address = httpsOrigin(invitation.getQueryParameter("school"));
-                new android.app.AlertDialog.Builder(this).setTitle("الانضمام إلى الصف")
-                    .setMessage("افتح هذا العنوان إذا أرسله لك المالك:"+ "\n" + address)
-                    .setPositiveButton("فتح الصف", (dialog, which) -> connect(address))
-                    .setNegativeButton("إلغاء", (dialog, which) -> finish()).show();
-                return;
-            } catch (Exception ignored) {}
-        }
         if(getIntent().getBooleanExtra("savedNotes",false)){
             String savedName=localData().getString("name","");
             if(localData().getBoolean("remembered",false)&&localData().contains("hash")&&!savedName.isEmpty())
                 showLocalNotes(savedName,0);
-            else setup("");
+            else setup();
         }else{
             // The local student dashboard uses one WebView-based navigation flow.
             openClassroom();
@@ -215,7 +186,7 @@ public final class MainActivity extends Activity {
         finally { spec.clearPassword(); java.util.Arrays.fill(password, '\0'); }
     }
 
-    private void setup(String message) {
+    private void setup() {
         localName = null;
         if (web != null) {
             LinearLayout old = (LinearLayout) web.getParent();
@@ -224,22 +195,9 @@ public final class MainActivity extends Activity {
             web = null;
         }
         LinearLayout screen = panel();
-        boolean local = origin.isEmpty();
-        boolean first = local && !localData().contains("hash");
-        banner(screen, "قوم دروس", local ? "مساحتك الدراسية على هذا الهاتف" : "تسجيل الدخول إلى المدرسة");
+        boolean first = !localData().contains("hash");
+        banner(screen, "قوم دروس", "مساحتك الدراسية على هذا الهاتف");
         LinearLayout card = card(screen);
-        if (!local) {
-            add(card, text(message, 15, MUTED, false), 0);
-            Button retry = primary("إعادة المحاولة");
-            add(card, retry, 12);
-            retry.setOnClickListener(view -> openStudentApp());
-            section(card, "فتح مساحة الهاتف", view -> {
-                getPreferences(MODE_PRIVATE).edit().remove("origin").apply();
-                origin = "";
-                setup("");
-            });
-            return;
-        }
         add(card, text(first ? "إنشاء حساب محلي" : "تسجيل الدخول", 22, INK, true), 0);
         EditText name = field(card, "الاسم", InputType.TYPE_TEXT_VARIATION_PERSON_NAME);
         EditText secret = field(card, "كلمة السر", InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -378,23 +336,7 @@ public final class MainActivity extends Activity {
         add(options,text(name,20,INK,true),0);
         section(options,"ملاحظاتي المحفوظة",w -> showLocalNotes(name,0));
         section(options,"الصف على شبكة الواي فاي",w -> openClassroom());
-        section(options,"ربط بعنوان المدرسة",w -> configureClass(options));
         section(options,"تسجيل الخروج",w -> {localData().edit().putBoolean("remembered",false).apply();setup("");});
-    }
-
-    private void connect(String address) {
-        origin = address;
-        getPreferences(MODE_PRIVATE).edit().putString("origin", address).apply();
-        localName = null;
-        openStudentApp();
-    }
-
-    private void configureClass(LinearLayout parent) {
-        EditText address = field(parent, "رابط الطلاب من المالك", InputType.TYPE_TEXT_VARIATION_URI);
-        section(parent, "فتح حساب الصف", v -> {
-            try { connect(httpsOrigin(address.getText().toString().trim())); }
-            catch(Exception error){ address.setError("أدخل رابط HTTPS الصحيح."); }
-        });
     }
 
     private void openSources(String name, String subject) {
@@ -420,14 +362,17 @@ public final class MainActivity extends Activity {
             @Override public boolean shouldOverrideUrlLoading(WebView view,String url){ return true; }
             @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view,WebResourceRequest request) {
                 String file = request.getUrl().getLastPathSegment();
-                if (request.getUrl().toString().startsWith(ASSETS) && java.util.Arrays.asList("source.html","source.js","ocr-worker.js","core.js","models.js").contains(file)) {
-                    try {return new android.webkit.WebResourceResponse(file.endsWith(".html") ? "text/html" : "application/javascript","UTF-8",getAssets().open(file));}
+                if (request.getUrl().toString().startsWith(ASSETS) && java.util.Arrays.asList("source.html","source.js","ocr-worker.js","core.js","models.js","room.css","cairo.woff2","thmanyahsans-Regular.woff2","thmanyahsans-Bold.woff2").contains(file)) {
+                    try {
+                        String mime=file.endsWith(".html")?"text/html":file.endsWith(".css")?"text/css":file.endsWith(".woff2")?"font/woff2":"application/javascript";
+                        return new android.webkit.WebResourceResponse(mime,file.endsWith(".woff2")?null:"UTF-8",getAssets().open(file));
+                    }
                     catch(Exception ignored){}
                 }
                 return new android.webkit.WebResourceResponse("text/plain","UTF-8",new java.io.ByteArrayInputStream(new byte[0]));
             }
         });
-        enablePicker(true);
+        enablePicker();
         web.loadUrl(ASSETS + "source.html?subject=" + Uri.encode(subject));
     }
 
@@ -511,83 +456,10 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private static String httpsOrigin(String input) throws Exception {
-        URI uri = new URI(input);
-        String path = uri.getRawPath();
-        if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null || uri.getRawUserInfo() != null
-            || uri.getRawQuery() != null || uri.getRawFragment() != null
-            || (path != null && !path.isEmpty() && !"/".equals(path))) throw new IllegalArgumentException();
-        int port = uri.getPort();
-        return "https://" + uri.getHost().toLowerCase(java.util.Locale.ROOT) + (port == -1 || port == 443 ? "" : ":" + port);
-    }
-
-    private boolean allowed(Uri url) {
-        if (url == null || !url.isHierarchical()) return false;
-        try { return origin.equals(httpsOrigin(url.getScheme() + "://" + url.getEncodedAuthority())); }
-        catch (Exception invalid) { return false; }
-    }
-
-    private void openStudentApp() {
-        LinearLayout root = layout();
-        web = new WebView(this);
-        TextView loading = new TextView(this);
-        loading.setText("جارٍ فتح قوم دروس…");
-        loading.setPadding(dp(16), dp(12), dp(16), dp(8));
-        loading.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        root.addView(loading);
-        ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        progress.setIndeterminate(true);
-        root.addView(progress);
-        root.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
-        WebView page = web;
-        web.getSettings().setUserAgentString(web.getSettings().getUserAgentString() + " QumDorousAndroid");
-        Runnable timedOut = () -> {
-            if (web == page && !isDestroyed()) {
-                page.stopLoading();
-                setup("تأخر الخادم في الرد. تحقق من الإنترنت ثم أعد المحاولة.");
-            }
-        };
-        page.postDelayed(timedOut, 12000);
-        web.getSettings().setJavaScriptEnabled(true);
-        web.getSettings().setDomStorageEnabled(true);
-        web.getSettings().setAllowFileAccess(false);
-        web.getSettings().setAllowContentAccess(false);
-        web.getSettings().setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
-        web.setWebViewClient(new WebViewClient() {
-            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                return !allowed(request.getUrl());
-            }
-            @Override public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                return !allowed(Uri.parse(url));
-            }
-            @Override public void onPageFinished(WebView view, String url) {
-                if (web != page || !allowed(Uri.parse(url))) return;
-                view.removeCallbacks(timedOut);
-                loading.setVisibility(View.GONE);
-                progress.setVisibility(View.GONE);
-            }
-            private void connectionError(WebView view) {
-                view.removeCallbacks(timedOut);
-                view.post(() -> {
-                    if (web == page && !isDestroyed()) setup("تعذّر الاتصال بخادم المدرسة. تحقق من الإنترنت.");
-                });
-            }
-            @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) connectionError(view);
-            }
-            @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, android.webkit.WebResourceResponse error) {
-                if (request.isForMainFrame()) connectionError(view);
-            }
-        });
-        enablePicker(false);
-        web.loadUrl(origin + "/");
-    }
-
-    private void enablePicker(boolean local) {
+    private void enablePicker() {
         web.setWebChromeClient(new WebChromeClient() {
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
-                if (local ? view.getUrl() == null || !view.getUrl().startsWith(ASSETS) : !allowed(Uri.parse(view.getUrl() == null ? "" : view.getUrl()))) return false;
+                if (view.getUrl() == null || !view.getUrl().startsWith(ASSETS)) return false;
                 if (chooser != null) chooser.onReceiveValue(null);
                 chooser = callback;
                 Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);

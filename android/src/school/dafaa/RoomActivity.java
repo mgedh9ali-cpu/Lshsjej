@@ -34,6 +34,9 @@ public final class RoomActivity extends Activity {
         remote=getPreferences(MODE_PRIVATE).getString("invite","");
         web=new WebView(this);web.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         android.widget.FrameLayout frame=new android.widget.FrameLayout(this);
+        int background=0xfff6f8fb;
+        frame.setBackgroundColor(background);
+        web.setBackgroundColor(background);
         frame.addView(web);
         frame.setOnApplyWindowInsetsListener((v,i)->{
             if(android.os.Build.VERSION.SDK_INT>=30){

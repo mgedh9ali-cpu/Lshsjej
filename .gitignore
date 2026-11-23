@@ -2,8 +2,7 @@
 data/
 node_modules/
 dist/
-deploy/backups/
-deploy/fonts/
+android/fonts/
 *.jks
 *.keystore
 .signing/

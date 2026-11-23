@@ -1,6 +1,6 @@
 'use strict';
 const $=sel=>document.querySelector(sel);
-const main=$('main'), drawer=$('aside'), pending=new Map();
+const main=$('main'), drawer=$('#drawer'), appBar=$('.app-bar'), menu=$('#menu'), shade=$('#shade'), pending=new Map();
 let serial=0,revision=0,page='login',name='',owner=false,paired=false,setup=false,cache,selected,hideTimer;
 let offline=false,hasAccount=false,locked=false,savedSession=false,previewUrl=null;
 function rpc(op,data={}){
@@ -21,8 +21,13 @@ function button(label,action,cls=''){
   const b=el('button',label,cls);b.type='button';
   b.onclick=async()=>{b.disabled=true;try{await action();}catch(err){message(err.message);}finally{b.disabled=false;}};return b;
 }
-function hero(title,subtitle){return wrap('hero',el('small',subtitle),el('h1',title));}
-function tile(title,detail,symbol,fn){const b=button('',fn,'tile');b.append(el('i',symbol),el('strong',title),el('small',detail));return b;}
+function hero(title,subtitle){return wrap('hero',el('h1',title),el('small',subtitle));}
+function tile(title,detail,symbol,fn){
+  const b=button('',fn,'tile'), icon=el('i',symbol);
+  icon.setAttribute('aria-hidden','true');
+  b.append(icon,el('strong',title),el('small',detail));
+  return b;
+}
 function field(label,key,type='text',value=''){
   const l=el('label',label,'field'),n=el(type==='textarea'?'textarea':'input');
   if(type!=='textarea')n.type=type;else n.rows=3;
@@ -39,23 +44,35 @@ function form(title,fields,label,fn){
 }
 const links=()=>[['home',owner?'لوحة الصف':'المواد'],['feed','الإشعارات'],['feedback','الاقتراحات'],...(owner?[['accounts','الطلاب']]:[]),['settings','الإعدادات']];
 function navigation(){
-  $('#menu').hidden=!(name||offline);$('#role').textContent=owner?'المالك':'الطالب';
+  menu.hidden=!(name||offline);
+  document.body.dataset.role=owner?'owner':'student';
+  $('#role').textContent=owner?'المالك':'الطالب';
   const tabs=(name||offline)?links():[];
-  drawer.querySelector('nav').replaceChildren(...tabs.map(([k,l])=>button(l,()=>go(k),page===k?'current':'')));
-  // A single side drawer avoids duplicate and off-screen navigation controls.
-  $('footer').replaceChildren();
-  $('#menu').setAttribute('aria-expanded',String(!drawer.hidden));
+  drawer.querySelector('nav').replaceChildren(...tabs.map(([key,label])=>{
+    const entry=button(label,()=>go(key,undefined,true),page===key?'current':'');
+    if(page===key)entry.setAttribute('aria-current','page');
+    return entry;
+  }));
 }
-function closeDrawer(restoreFocus=false){
-  drawer.hidden=true;$('#shade').hidden=true;$('#menu').setAttribute('aria-expanded','false');
-  if(restoreFocus)$('#menu').focus();
+function showDrawer(open,restoreFocus=false){
+  drawer.hidden=shade.hidden=!open;
+  document.body.classList.toggle('drawer-open',open);
+  appBar.inert=main.inert=open;
+  menu.setAttribute('aria-expanded',String(open));
+  if(open)$('#close').focus();
+  else if(restoreFocus)menu.focus();
 }
-$('#menu').setAttribute('aria-controls','drawer');
-$('#menu').setAttribute('aria-expanded','false');
-$('#menu').onclick=()=>{drawer.hidden=false;$('#shade').hidden=false;$('#menu').setAttribute('aria-expanded','true');$('#close').focus();};
-$('#close').onclick=()=>closeDrawer(true);
-$('#shade').onclick=()=>closeDrawer(true);
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!drawer.hidden){e.preventDefault();closeDrawer(true);}});
+menu.onclick=()=>showDrawer(true);
+$('#close').onclick=shade.onclick=()=>showDrawer(false,true);
+document.addEventListener('keydown',e=>{
+  if(drawer.hidden)return;
+  if(e.key==='Escape'){e.preventDefault();showDrawer(false,true);return;}
+  if(e.key!=='Tab')return;
+  const items=drawer.querySelectorAll('button:not(:disabled)');
+  const first=items[0],last=items[items.length-1];
+  if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+  else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+});
 async function boot(){
   const state=await rpc('boot');owner=state.owner;paired=state.paired;setup=state.setup;
   hasAccount=locked=state.locked;savedSession=state.savedSession;name=state.studentName||'';offline=!owner&&!name;
@@ -70,9 +87,9 @@ async function boot(){
   }
   await go(owner&&!name?'login':'home');
 }
-async function go(next,item){
+async function go(next,item,focusPage=false){
   if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
-  closeDrawer();page=next;const mine=++revision;
+  showDrawer(false);page=next;const mine=++revision;
   if(item&&next==='subject')selected=item;
   navigation();
   const pages={unlock,login,home,feed,feedback,accounts,settings,subject,source,quiz,pair};
@@ -80,7 +97,13 @@ async function go(next,item){
     if((name||offline)&&['home','feed','feedback','accounts','settings','subject'].includes(next))cache=await rpc('home');
     if(mine!==revision)return;
     const nodes=await pages[next](item);
-    if(mine===revision){main.replaceChildren(...nodes.filter(Boolean));window.scrollTo(0,0);}
+    if(mine===revision){
+      main.replaceChildren(...nodes.filter(Boolean));window.scrollTo(0,0);
+      if(focusPage){
+        const heading=main.querySelector('h1');
+        heading.tabIndex=-1;heading.focus({preventScroll:true});
+      }
+    }
   }catch(err){
     if(mine!==revision)return;
     if(err.message.includes('انتهت الجلسة')){savedSession=false;name='';offline=!owner;await go(owner?'login':'home');return;}
@@ -101,15 +124,25 @@ function login(){
 }
 function unlock(){return [hero('مصادري المحفوظة','تسجيل الدخول إلى حساب الهاتف'),form('تسجيل الدخول',[field('الاسم','name'),field('كلمة السر','password','password')],'فتح مصادري',async d=>{await rpc('unlock',d);locked=false;await go(selected?'subject':'home',selected);})];}
 const symbols=['ϟ','⚗','✿','Aa','∑'];
+const number=new Intl.NumberFormat('ar-SY');
 function home(){
   const subjects=cache.subjects,grid=wrap('grid');
-  const render=q=>{const hits=subjects.filter(s=>s.name.includes(q));grid.replaceChildren(...hits.map(s=>tile(s.name,(s.docs)+' مصادر'+(s.page?' · صفحة '+s.page:''),symbols[(s.id-1)%5],()=>{tab='sources';return go('subject',s);})));if(!hits.length)grid.append(el('p','ما في مادة بهذا الاسم.'));};
+  const render=q=>{
+    const hits=subjects.filter(s=>s.name.includes(q));
+    grid.replaceChildren(...hits.map(s=>{
+      const count=s.docs||0;
+      const detail=count===0?'لا مصادر بعد':count===1?'مصدر واحد':count===2?'مصدران':number.format(count)+(count<=10?' مصادر':' مصدرًا');
+      const progress=s.page?' · ص '+number.format(s.page):'';
+      return tile(s.name,detail+progress,symbols[(s.id-1)%symbols.length],()=>{tab='sources';return go('subject',s);});
+    }));
+    if(!hits.length)grid.append(el('p',q?'ما في مادة بهذا الاسم.':'لا توجد مواد بعد.','empty-state'));
+  };
   const search=el('input');search.type='search';search.placeholder='ابحث عن مادة';search.setAttribute('aria-label',search.placeholder);search.oninput=()=>render(search.value.trim());render('');
   const waiting=cache.feedback.filter(x=>!x.reply).length;
   const active=owner?cache.students.filter(s=>Number(s.last_seen)>Date.now()-24*3600000).length:0;
   return [hero(owner?'نظرة على الصف':'المواد الدراسية',owner?name+' · '+cache.students.length+' طلاب':(name?'صف '+name:'مكتبة الدروس')),
-    owner&&wrap('grid',tile('الطلاب النشطون',active+' خلال آخر ٢٤ ساعة','◉',()=>go('accounts')),tile('صندوق الاقتراحات',waiting+' بانتظار الرد','✉',()=>go('feedback')),tile('إشعار جديد','إرسال إلى الصف','＋',()=>go('feed'))),
-    owner&&button('ربط هواتف الطلاب',()=>go('settings')),owner&&el('h2','المواد الدراسية'),search,grid,owner&&form('مادة جديدة',[field('اسم المادة','name')],'إضافة مادة',async d=>{await rpc('addSubject',d);await go('home');})];
+    owner&&wrap('grid stat-grid',tile('الطلاب النشطون',number.format(active)+' خلال آخر ٢٤ ساعة','◉',()=>go('accounts')),tile('صندوق الاقتراحات',number.format(waiting)+' بانتظار الرد','✉',()=>go('feedback')),tile('إشعار جديد','إرسال إلى الصف','＋',()=>go('feed'))),
+    owner&&button('ربط هواتف الطلاب',()=>go('settings')),owner&&el('h2','المواد الدراسية','section-title'),search,grid,owner&&form('مادة جديدة',[field('اسم المادة','name')],'إضافة مادة',async d=>{await rpc('addSubject',d);await go('home');})];
 }
 function feed(){if(offline)return [hero('أخبار الصف والإشعارات','قوم دروس'),el('p','تظهر هنا الإعلانات التي ينشرها المالك بعد ربط حساب الصف.'),button('إعدادات الصف',()=>go('settings'))];return [hero('الإشعارات','أخبار الصف وتذكيراته'),owner&&form('إشعار عام',[field('العنوان','title'),field('نص الإشعار','body','textarea')],'نشر للطلاب',async d=>{await rpc('notice',d);await go('feed');}),
   ...cache.notices.map(n=>wrap('card',el('small',date(n.created)),el('h3',n.title),el('pre',n.body))),!cache.notices.length&&el('p','ستظهر أخبار الصف هنا عند نشرها.'),button('تحديث',()=>go('feed'))];}
@@ -174,13 +207,13 @@ async function subject(item){
   }
   let last='';
   const items=[];let count=0;const dayCounts={};for(const d of content.sources){const k=date(d.created);dayCounts[k]=(dayCounts[k]||0)+1;}
-  for(const d of content.sources){const day=date(d.created);if(day!==last){items.push(el('h2',day));last=day;count=dayCounts[day];}items.push(button('مصدر '+count--+' · '+d.title+(owner&&d.added_by?' · '+d.added_by:''),()=>go('source',d),'tile'));}
+  for(const d of content.sources){const day=date(d.created);if(day!==last){items.push(el('h3',day));last=day;count=dayCounts[day];}items.push(button('مصدر '+number.format(count--)+' · '+d.title+(owner&&d.added_by?' · '+d.added_by:''),()=>go('source',d),'source-item'));}
   const add=el('details','','add-source');add.append(el('summary','＋ إضافة صورة مصدر'),sourceForm());
-  return [hero(s.name,s.page?'وصل الصف إلى صفحة '+s.page:'مكتبة المادة'),controls,el('h2','مصادر المادة'),offline&&locked?button('فتح مصادري المحفوظة',()=>go('unlock')):add,...items,owner&&form('تقدّم الصف',[field('رقم الصفحة','page','number',s.page||'')],'حفظ الصفحة',async d=>{await rpc('progress',{subject:s.id,page:Number(d.page)});await go('subject',s);})];
+  return [hero(s.name,s.page?'وصل الصف إلى صفحة '+number.format(s.page):''),controls,el('h2','مصادر المادة','section-title'),offline&&locked?button('فتح مصادري المحفوظة',()=>go('unlock')):add,...items,!items.length&&el('p',offline&&locked?'سجّل الدخول لعرض مصادرك.':'لا توجد مصادر لهذه المادة بعد.','empty-state'),owner&&form('تقدّم الصف',[field('رقم الصفحة','page','number',s.page||'')],'حفظ الصفحة',async d=>{await rpc('progress',{subject:s.id,page:Number(d.page)});await go('subject',s);})];
 }
 async function source(item){const record=await rpc('source',{id:item.id});const img=el('img');img.src=record.image instanceof Blob?(previewUrl=URL.createObjectURL(record.image)):record.image;img.alt='صورة المصدر';
   return [button('العودة للمادة',()=>go('subject',selected)),hero(record.title,date(record.created)+(owner&&record.added_by?' · أضافه '+record.added_by:'')),wrap('card',el('pre',record.body),img),owner&&button('حذف المصدر',async()=>{if(confirm('حذف هذا المصدر من الصف؟')){await rpc('remove',{id:item.id});await go('subject',selected);}})];}
 async function quiz(item){const q=await rpc('quiz',{id:item.id}),choices=JSON.parse(q.choices),result=el('p');
   return [hero(q.title,selected.name),wrap('card',el('h3',q.question),...choices.map((v,i)=>button(v,async()=>{if(owner){message('معاينة المالك');return;}const score=await rpc('solve',{id:item.id,choice:i});result.textContent=i===score.answer?'إجابة صحيحة':'الإجابة الصحيحة · '+choices[score.answer];})),result),button('العودة للمادة',()=>go('subject',selected))];}
-window.backPage=()=>{if(!drawer.hidden){closeDrawer(true);return true;}if(page==='source'||page==='quiz'){go('subject',selected);return true;}if(!owner&&(page==='pair'||page==='login')){go('home');return true;}if((name||offline)&&page!=='home'){go('home');return true;}return false;};
+window.backPage=()=>{if(!drawer.hidden){showDrawer(false,true);return true;}if(page==='source'||page==='quiz'){go('subject',selected);return true;}if(!owner&&(page==='pair'||page==='login')){go('home');return true;}if((name||offline)&&page!=='home'){go('home');return true;}return false;};
 boot().catch(e=>message(e.message));

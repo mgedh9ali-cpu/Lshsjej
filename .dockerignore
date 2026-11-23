@@ -1,9 +1,0 @@
-**
-!package.json
-!server.mjs
-!web/
-!web/**
-!scripts/
-!scripts/backup.mjs
-!lib/
-!lib/**

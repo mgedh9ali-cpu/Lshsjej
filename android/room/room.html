@@ -1,2 +1,32 @@
-<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self';script-src 'self' 'wasm-unsafe-eval';style-src 'self';img-src data: blob: 'self';connect-src 'none';frame-src 'none';object-src 'none';base-uri 'none'"><title>قوم دروس</title><link rel="stylesheet" href="room.css"></head><body>
-<header><button id="menu" aria-label="فتح القائمة">☰</button><b>قوم دروس</b><span id="role"></span></header><button id="shade" hidden aria-label="إغلاق القائمة"></button><aside id="drawer" hidden><button id="close">إغلاق القائمة ×</button><nav></nav></aside><main aria-live="polite"></main><footer></footer><div id="message" role="status" hidden></div><script src="library.js"></script><script src="room.js"></script></body></html>
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f6f8fb">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self';script-src 'self' 'wasm-unsafe-eval';style-src 'self';img-src data: blob: 'self';connect-src 'none';frame-src 'none';object-src 'none';base-uri 'none'">
+  <title>قوم دروس</title>
+  <link rel="stylesheet" href="room.css">
+</head>
+<body>
+  <header class="app-bar">
+    <button id="menu" class="icon-button" type="button" aria-label="فتح القائمة" aria-controls="drawer" aria-expanded="false" hidden>
+      <span class="menu-icon" aria-hidden="true"></span>
+    </button>
+    <b>قوم دروس</b>
+    <span id="role"></span>
+  </header>
+  <div id="shade" hidden aria-hidden="true"></div>
+  <aside id="drawer" role="dialog" aria-modal="true" aria-label="قائمة التنقل" hidden>
+    <div class="drawer-heading">
+      <b>القائمة</b>
+      <button id="close" class="icon-button" type="button" aria-label="إغلاق القائمة"><span aria-hidden="true">×</span></button>
+    </div>
+    <nav aria-label="أقسام التطبيق"></nav>
+  </aside>
+  <main aria-live="polite"></main>
+  <div id="message" role="status" hidden></div>
+  <script src="library.js"></script>
+  <script src="room.js"></script>
+</body>
+</html>
