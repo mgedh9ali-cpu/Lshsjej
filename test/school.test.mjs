@@ -79,7 +79,7 @@ test('separate interfaces, owner approvals, private results, notices and image d
   assert.equal((await admin('/accounts', { name: 'مساعد', username: 'assistant', password, role: 'assistant', permissions: ['quizzes'] })).status, 200);
   const assistant = await request(adminPort, '/login', { username: 'assistant', password });
   assert.equal((await admin('/password', { password: 'revised-assistant-key' }, assistant.cookie)).status, 200);
-  const learner = await request(studentPort, '/login', { username: 'student1', password });
+  const learner = await request(studentPort, '/login', { name: 'طالب', password });
   assert.equal((await admin('/me', undefined, learner.cookie)).status, 401);
   assert.equal((await student('/subjects')).status, 403);
   assert.equal((await student('/password', { password: 'revised-student-key' })).status, 200);

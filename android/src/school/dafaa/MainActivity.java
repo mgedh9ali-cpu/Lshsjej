@@ -18,11 +18,11 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.TextView;
-import java.net.HttpURLConnection;
 import java.net.URI;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 
 public final class MainActivity extends Activity {
@@ -33,7 +33,16 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        origin = getPreferences(MODE_PRIVATE).getString("origin", "");
+        origin = "";
+        try (BufferedReader config = new BufferedReader(new InputStreamReader(
+                getAssets().open("student-origin.txt"), StandardCharsets.UTF_8))) {
+            String address = config.readLine();
+            if (address != null && !address.isEmpty()) origin = httpsOrigin(address);
+        } catch (Exception ignored) {}
+        if (origin.isEmpty()) {
+            try { origin = httpsOrigin(getPreferences(MODE_PRIVATE).getString("origin", "")); }
+            catch (Exception ignored) {}
+        }
         if (origin.isEmpty()) setup("");
         else openStudentApp();
     }
@@ -85,58 +94,32 @@ public final class MainActivity extends Activity {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(24), dp(32), dp(24), dp(24));
         root.addView(card);
-        ImageView logo = new ImageView(this);
-        logo.setImageResource(getResources().getIdentifier("school_logo", "drawable", getPackageName()));
-        card.addView(logo, new LinearLayout.LayoutParams(dp(72), dp(72)));
         TextView title = new TextView(this);
         title.setText("قوم دروس");
         title.setTextSize(30);
         title.setTextColor(Color.rgb(36,21,77));
         card.addView(title);
-        ImageView study = new ImageView(this);
-        study.setImageResource(getResources().getIdentifier("study", "drawable", getPackageName()));
-        study.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        card.addView(study, new LinearLayout.LayoutParams(-1, dp(118)));
-        TextView instructions = new TextView(this);
-        instructions.setText("أدخل رابط تطبيق الطلاب الذي استلمته من المدرسة.");
-        instructions.setTextSize(17);
-        card.addView(instructions);
-        EditText address = new EditText(this);
-        address.setHint("https://");
-        address.setText(origin);
-        address.setTextDirection(View.TEXT_DIRECTION_LTR);
-        address.setSingleLine(true);
-        address.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        card.addView(address);
-        Button connect = new Button(this);
-        connect.setText("اتصال");
-        connect.setMinimumHeight(dp(48));
-        card.addView(connect);
+        EditText name = new EditText(this);
+        name.setHint("الاسم");
+        name.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PERSON_NAME);
+        name.setSingleLine(true);
+        card.addView(name);
+        EditText password = new EditText(this);
+        password.setHint("كلمة السر");
+        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        password.setSingleLine(true);
+        card.addView(password);
+        Button login = new Button(this);
+        login.setText(origin.isEmpty() ? "دخول" : "إعادة المحاولة");
+        login.setMinimumHeight(dp(48));
+        card.addView(login);
         TextView status = new TextView(this);
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         status.setText(message);
         card.addView(status);
-        connect.setOnClickListener(view -> {
-            final String selected;
-            try { selected = httpsOrigin(address.getText().toString().trim()); }
-            catch (Exception invalid) { status.setText("أدخل رابط HTTPS كاملًا لواجهة الطلاب."); return; }
-            connect.setEnabled(false);
-            status.setText("جارٍ التحقق من الرابط…");
-            new Thread(() -> {
-                boolean valid = checkSchool(selected);
-                runOnUiThread(() -> {
-                    if (isFinishing() || isDestroyed()) return;
-                    if (!valid) {
-                        status.setText("تعذّر الاتصال بواجهة الطلاب. تحقق من الرابط والإنترنت.");
-                        connect.setEnabled(true);
-                        return;
-                    }
-                    if (!selected.equals(origin)) CookieManager.getInstance().removeAllCookies(null);
-                    origin = selected;
-                    getPreferences(MODE_PRIVATE).edit().putString("origin", origin).apply();
-                    openStudentApp();
-                });
-            }).start();
+        login.setOnClickListener(view -> {
+            if (origin.isEmpty()) status.setText("خادم المدرسة غير متاح بعد.");
+            else openStudentApp();
         });
     }
 
@@ -148,28 +131,6 @@ public final class MainActivity extends Activity {
             || (path != null && !path.isEmpty() && !"/".equals(path))) throw new IllegalArgumentException();
         int port = uri.getPort();
         return "https://" + uri.getHost().toLowerCase(java.util.Locale.ROOT) + (port == -1 || port == 443 ? "" : ":" + port);
-    }
-
-    private static boolean checkSchool(String address) {
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection) new URI(address + "/student-app").toURL().openConnection();
-            connection.setInstanceFollowRedirects(false);
-            connection.setConnectTimeout(4000);
-            connection.setReadTimeout(4000);
-            if (connection.getResponseCode() != 200) return false;
-            try (java.io.InputStream stream = connection.getInputStream()) {
-                byte[] payload = new byte[32];
-                int count = 0;
-                int read;
-                while (count < payload.length && (read = stream.read(payload, count, payload.length - count)) != -1) count += read;
-                return "school-student-v1".equals(new String(payload, 0, count, StandardCharsets.UTF_8));
-            }
-        } catch (Exception failure) {
-            return false;
-        } finally {
-            if (connection != null) connection.disconnect();
-        }
     }
 
     private boolean allowed(Uri url) {
@@ -189,16 +150,12 @@ public final class MainActivity extends Activity {
         ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setIndeterminate(true);
         root.addView(progress);
-        Button connection = new Button(this);
-        connection.setText("إعدادات الاتصال");
-        connection.setOnClickListener(view -> setup(""));
-        root.addView(connection);
         root.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
         WebView page = web;
         Runnable timedOut = () -> {
             if (web == page && !isDestroyed()) {
                 page.stopLoading();
-                setup("تأخر الخادم في الرد. تحقق من رابط الطلاب ثم أعد المحاولة.");
+                setup("تأخر الخادم في الرد. تحقق من الإنترنت ثم أعد المحاولة.");
             }
         };
         page.postDelayed(timedOut, 12000);
@@ -220,12 +177,11 @@ public final class MainActivity extends Activity {
                 view.removeCallbacks(timedOut);
                 loading.setVisibility(View.GONE);
                 progress.setVisibility(View.GONE);
-                connection.setVisibility(View.GONE);
             }
             private void connectionError(WebView view) {
                 view.removeCallbacks(timedOut);
                 view.post(() -> {
-                    if (web == page && !isDestroyed()) setup("تعذّر فتح رابط الطلاب. تحقق من الرابط والإنترنت.");
+                    if (web == page && !isDestroyed()) setup("تعذّر الاتصال بخادم المدرسة. تحقق من الإنترنت.");
                 });
             }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {

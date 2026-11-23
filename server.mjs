@@ -233,7 +233,7 @@ function quizQuestions(input) {
   });
 }
 function createUser(input, role) {
-  const name = field(input.name);
+  const name = field(input.name).replace(/\s+/gu, ' ');
   const login = username(input.username);
   const secret = input.password ? checkPassword(input.password) : randomBytes(12).toString('base64url');
   const grants = role === 'assistant' && Array.isArray(input.permissions) ? permissions.filter(p => input.permissions.includes(p)) : [];
@@ -246,13 +246,22 @@ async function api(req, res, area, route, params) {
   if (method === 'POST' && route === '/login') {
     const login = await json(req, 4096);
     limit('ip:' + area + ':' + req.socket.remoteAddress, 120, 600000);
-    const name = username(login.username);
-    limit('login:' + area + ':' + name, 10, 600000);
-    const user = get('SELECT * FROM users WHERE username=? AND active=1', name);
-    const stored = user?.password || dummyPassword;
-    const matched = await matchesPassword(checkPassword(login.password), stored);
+    const byName = area === 'student' && login.name !== undefined;
+    const name = byName ? field(login.name).replace(/\s+/gu, ' ') : username(login.username);
+    limit('login:' + area + ':' + name.toLowerCase(), 10, 600000);
+    const password = checkPassword(login.password);
+    const candidates = byName
+      ? all("SELECT * FROM users WHERE role='student' AND active=1 AND name=? COLLATE NOCASE LIMIT 9", name)
+      : all('SELECT * FROM users WHERE username=? AND active=1', name);
+    if (candidates.length > 8) fail(401, 'تعذّر تمييز الحساب. راجع إدارة المدرسة.');
+    const matches = [];
+    for (const candidate of candidates) {
+      if (await matchesPassword(password, candidate.password)) matches.push(candidate);
+    }
+    if (!candidates.length) await matchesPassword(password, dummyPassword);
+    const user = matches[0];
     const current = user && get('SELECT password,active FROM users WHERE id=?', user.id);
-    if (!matched || !current?.active || current.password !== stored || (area === 'student') !== (user.role === 'student') ||
+    if (matches.length !== 1 || !current?.active || current.password !== user.password || (area === 'student') !== (user.role === 'student') ||
         (user.role === 'owner' && !verifyTotp(login.code || ''))) fail(401, 'بيانات الدخول غير صحيحة.');
     const token = randomBytes(32).toString('hex');
     const age = area === 'student' ? 86400 : 14400;
@@ -481,7 +490,6 @@ async function api(req, res, area, route, params) {
 }
 
 const staticFiles = {
-  '/study.webp': ['study.webp', 'image/webp'],
   '/icon-192.png': ['icon-192.png', 'image/png'],
   '/icon-512.png': ['icon-512.png', 'image/png'],
   '/fonts/cairo-arabic.woff2': ['fonts/cairo-arabic-wght-normal.woff2', 'font/woff2'],

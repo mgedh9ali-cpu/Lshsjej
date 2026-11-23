@@ -112,3 +112,4 @@ button{transition:background-color .16s,border-color .16s,box-shadow .16s,transf
 .class-progress{border-inline-start:4px solid #45c6a8}.class-progress strong{color:#5030a4;font-size:1.25em}
 .login-hero img.study-illustration{width:100%;height:auto;max-height:15rem;object-fit:cover;object-position:center;border-radius:15px;box-shadow:none}
 @media(max-width:650px){.login-hero img.study-illustration{max-height:9rem}}
+.simple-login{width:min(100%,420px);margin:4vh auto 0}

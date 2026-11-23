@@ -53,9 +53,17 @@ export function errorView(error) {
 }
 export function login(area, ready) {
   nav.replaceChildren();
+  if (area === 'student') {
+    app.replaceChildren(el('div', { class: 'simple-login' }, form([
+      el('h1', {}, 'تسجيل الدخول'),
+      line('الاسم', input('name', { autocomplete: 'username', required: true })),
+      line('كلمة السر', input('password', { type: 'password', autocomplete: 'current-password', required: true })),
+    ], 'دخول', async data => ready(await api('/login', data)))));
+    return;
+  }
   app.replaceChildren(el('div', { class: 'login-layout' },
     el('section', { class: 'hero login-hero' },
-      area === 'student' && el('img', { class: 'study-illustration', src: '/study.webp', width: 780, height: 520, alt: '' }), el('img', { src: '/icon-192.png', alt: '', width: 88, height: 88 }),
+      el('img', { src: '/icon-192.png', alt: '', width: 88, height: 88 }),
       el('h1', {}, area === 'admin' ? 'لوحة إدارة قوم دروس' : 'قوم دروس'),
       el('p', {}, area === 'admin' ? 'أدر المحتوى والحسابات من مكان واحد.' : 'موادك ومستنداتك واختباراتك في مكان واحد.')),
     form([el('h2', {}, 'تسجيل الدخول'),
