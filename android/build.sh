@@ -6,7 +6,7 @@ jdk="${JAVA_HOME:?Set JAVA_HOME to a JDK}"
 export JAVA_HOME="$jdk"
 bt="$sdk/build-tools/${SCHOOL_BUILD_TOOLS:-35.0.0}"
 platform="$sdk/platforms/${SCHOOL_ANDROID_PLATFORM:-android-36}/android.jar"
-output="${1:-$root/dist/QumDorous-0.6.1.apk}"
+output="${1:-$root/dist/QumDorous-0.6.2.apk}"
 manifest="$root/android/AndroidManifest.xml"
 if [[ "${2:-student}" == "owner" ]]; then manifest="$root/android/OwnerManifest.xml"; fi
 keystore="${SCHOOL_KEYSTORE:?Set SCHOOL_KEYSTORE}"
