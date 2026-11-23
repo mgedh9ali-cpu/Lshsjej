@@ -76,7 +76,12 @@ async function go(next,item){
     main.replaceChildren(hero('تعذّر فتح الصفحة',err.message),button('إعادة المحاولة',()=>go(next,item)),button(owner?'العودة':'عرض المواد على الهاتف',()=>{if(!owner){offline=true;name='';}return go(owner&&!name?'login':'home');}));
   }
 }
-function pair(){return [hero('ربط الهاتف بالصف','الاتصال عبر شبكة الواي فاي المشتركة'),form('رمز الربط',[field('الصق الرمز الذي شاركه المالك','invite','textarea')],'ربط الصف',async d=>{await rpc('pair',d);paired=true;savedSession=false;await go('login');}),button('العودة للمواد',()=>go('home'))];}
+function pair(){return [hero('ربط الهاتف بالصف','الاتصال عبر شبكة الواي فاي المشتركة'),form('رمز الربط',[field('الصق الرمز الذي شاركه المالك','invite','textarea')],'ربط الصف',async d=>{const linked=await rpc('pair',d);paired=true;savedSession=linked.retained;
+    if(savedSession){
+      try{const account=await rpc('resume');name=account.name;offline=false;await go('home');return;}
+      catch(err){if(!err.message.includes('انتهت الجلسة'))throw err;savedSession=false;}
+    }
+    await go('login');}),button('العودة للمواد',()=>go('home'))];}
 function login(){
   const first=owner&&setup;
   return [hero(owner?'لوحة قوم دروس':'قوم دروس',owner?'إدارة الصف':'مساحة الطالب'),form(first?'إنشاء حساب المالك':'تسجيل الدخول',[field('الاسم','name'),field(first?'كلمة السر · ٨ أحرف على الأقل':'كلمة السر','password','password')],first?'إنشاء اللوحة':'دخول',async d=>{
