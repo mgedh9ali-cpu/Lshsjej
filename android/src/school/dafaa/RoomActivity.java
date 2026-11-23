@@ -60,6 +60,14 @@ public final class RoomActivity extends Activity {
                 catch(ActivityNotFoundException e){picker=null;cb.onReceiveValue(null);}return true;
             }});
         web.addJavascriptInterface(new Bridge(),"Classroom");web.loadUrl(base+"room.html");
+        if(owner)tasks.execute(()->{
+            try{
+                link.start();sharing=true;
+                runOnUiThread(()->getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
+            }catch(Exception problem){
+                runOnUiThread(()->noticeBackup(false,"تعذّر تشغيل مشاركة الصف. افتح الإعدادات وأعد المحاولة."));
+            }
+        });
     }
     public final class Bridge{
         @JavascriptInterface public void request(int id,String raw){
