@@ -50,7 +50,7 @@ test('separate interfaces, owner approvals, private results, notices and image d
     const [data] = await Promise.race([once(server.stdout, 'data'), exited.then(() => { throw Error('Server exited'); })]);
     logs += data;
   }
-  for (const [port, title] of [[studentPort, 'منصة الدفعة'], [adminPort, 'لوحة إدارة الدفعة']]) {
+  for (const [port, title] of [[studentPort, 'قو مدرس'], [adminPort, 'لوحة إدارة قو مدرس']]) {
     const response = await fetch('http://127.0.0.1:' + port + '/');
     assert.equal(response.status, 200);
     assert.match(await response.text(), new RegExp('<title>' + title + '</title>'));
@@ -119,6 +119,28 @@ test('separate interfaces, owner approvals, private results, notices and image d
   assert.equal((await completed(semantic.body.id)).document, published.document);
   assert.equal(aiCalls, 2);
   assert.equal((await student('/documents?subject=' + subject)).body.length, 1);
+  const archiveUrl = '/archive?subject=' + subject;
+  const initialArchive = (await student(archiveUrl)).body;
+  assert.equal(initialArchive.images.length, 1);
+  assert.equal(initialArchive.documents[0].day, initialArchive.images[0].day);
+  assert.equal((await student('/progress', { subject, page: 57 })).status, 404);
+  assert.equal((await admin('/progress', { subject, page: 53 })).status, 200);
+  assert.equal((await admin('/progress', { subject, page: 57 })).status, 200);
+  assert.equal((await student(archiveUrl)).body.page, 57);
+  const photo = { subject, title: 'نشاط', day: '2026-11-22', image: png };
+  assert.equal((await admin('/archive-image', { ...photo, day: '2026-02-30' })).status, 400);
+  const manual = (await admin('/archive-image', photo)).body.id;
+  assert.equal((await admin('/archive-image-remove', { id: manual })).status, 200);
+  const later = (await admin('/archive-image', photo)).body.id;
+  const dated = (await student(archiveUrl)).body.images.filter(item => item.day === photo.day && item.id === later);
+  assert.equal(dated[0].number, 2);
+  const imageUrl = 'http://127.0.0.1:' + studentPort + '/archive-image?id=';
+  assert.equal((await fetch(imageUrl + later)).status, 401);
+  assert.equal((await fetch(imageUrl + manual, { headers: { Cookie: learner.cookie } })).status, 404);
+  const visibleImage = await fetch(imageUrl + later, { headers: { Cookie: learner.cookie } });
+  assert.equal(visibleImage.headers.get('Content-Type'), 'image/png');
+  assert.equal((await visibleImage.arrayBuffer()).byteLength, Buffer.from(png.split(',')[1], 'base64').length);
+
   const group = Array.from({ length: 30 }, (_, index) => ({ username: 'load' + index, name: 'طالب ' + index, password }));
   assert.equal((await admin('/accounts', { accounts: group })).status, 200);
   const start = performance.now();

@@ -89,10 +89,14 @@ public final class MainActivity extends Activity {
         logo.setImageResource(getResources().getIdentifier("school_logo", "drawable", getPackageName()));
         card.addView(logo, new LinearLayout.LayoutParams(dp(72), dp(72)));
         TextView title = new TextView(this);
-        title.setText("منصة الدفعة");
+        title.setText("قو مدرس");
         title.setTextSize(30);
         title.setTextColor(Color.rgb(36,21,77));
         card.addView(title);
+        ImageView study = new ImageView(this);
+        study.setImageResource(getResources().getIdentifier("study", "drawable", getPackageName()));
+        study.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        card.addView(study, new LinearLayout.LayoutParams(-1, dp(118)));
         TextView instructions = new TextView(this);
         instructions.setText("أدخل رابط تطبيق الطلاب الذي استلمته من المدرسة.");
         instructions.setTextSize(17);
@@ -178,7 +182,7 @@ public final class MainActivity extends Activity {
         LinearLayout root = layout();
         web = new WebView(this);
         TextView loading = new TextView(this);
-        loading.setText("جارٍ فتح منصة الدفعة…");
+        loading.setText("جارٍ فتح قو مدرس…");
         loading.setPadding(dp(16), dp(12), dp(16), dp(8));
         loading.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         root.addView(loading);

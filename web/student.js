@@ -1,11 +1,11 @@
-import { app, nav, el, button, heading, line, api, form, login, temporary, logout, empty, errorView, date } from './common.js';
+import { app, nav, el, button, heading, line, api, form, login, temporary, logout, empty, errorView, date, archiveView, imageFile } from './common.js';
 
 let page = 0;
 const display = fn => async () => {
   const current = ++page;
   try {
     const content = await fn(current);
-    if (current === page) app.replaceChildren(...content);
+    if (current === page) app.replaceChildren(...content.filter(Boolean));
   } catch (error) { if (current === page) errorView(error); }
 };
 function noticeList(items) {
@@ -29,7 +29,7 @@ const statusLabel = { processing: 'قيد المعالجة', published: 'نُش�
 function subjectPage(subject, tab = 'documents') {
   return display(async current => {
     const query = '?subject=' + subject.id;
-    const [items, notices] = await Promise.all([api('/' + tab + query), api('/notices')]);
+    const [items, notices] = await Promise.all([api((tab === 'documents' ? '/archive' : '/quizzes') + query), api('/notices')]);
     const controls = el('div', { class: 'actions', role: 'group', 'aria-label': 'أقسام المادة' },
       button('المستندات', subjectPage(subject), 'secondary', { 'aria-pressed': String(tab === 'documents') }),
       button('الاختبارات', subjectPage(subject, 'quizzes'), 'secondary', { 'aria-pressed': String(tab === 'quizzes') }));
@@ -38,33 +38,36 @@ function subjectPage(subject, tab = 'documents') {
       content.push(items.length ? el('div', { class: 'stack' }, items.map(item => button(item.title, quizPage(subject, item.id), 'card list-button'))) : empty('ما في اختبارات منشورة لهذه المادة.'));
     } else {
       const list = el('div', { class: 'stack' });
-      const render = (filter = '') => {
-        const matched = items.filter(item => item.title.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase()));
-        list.replaceChildren(...(matched.length ? matched.map(item => button(item.title, documentPage(subject, item.id), 'card list-button')) : [empty('ما في مستندات مطابقة.')]));
-      };
+      let archive = items;
+      let search = '';
+      const render = () => list.replaceChildren(...archiveView(archive, (item, number) =>
+        button('مستند ' + number + ' · ' + item.title, documentPage(subject, item.id), 'card list-button'), undefined, search));
       render();
-      content.push(line('البحث بعنوان المستند', el('input', { type: 'search', oninput: event => render(event.target.value) })), list);
+      content.push(items.page && el('p', { class: 'card class-progress' }, 'تم الوصول إلى صفحة ', el('strong', {}, String(items.page))),
+        line('البحث بعنوان الصورة أو المستند', el('input', { type: 'search', oninput: event => { search = event.target.value; render(); } })), list);
       const submissionList = el('div', { class: 'stack', 'aria-live': 'polite' });
+      let wasProcessing = false;
       async function refresh() {
         const submissions = await api('/submissions' + query);
         if (page !== current) return;
         submissionList.replaceChildren(...submissions.map(item => el('div', { class: 'row' },
           el('span', {}, statusLabel[item.state]), item.document && button('فتح المستند', documentPage(subject, item.document)))));
-        if (submissions.some(item => item.state === 'processing')) setTimeout(() => {
+        const processing = submissions.some(item => item.state === 'processing');
+        if (wasProcessing && !processing) {
+          archive = await api('/archive' + query);
+          if (page === current) render();
+        }
+        wasProcessing = processing;
+        if (processing) setTimeout(() => {
           if (page === current) refresh().catch(error => { submissionList.textContent = error.message; });
         }, 2500);
       }
       refresh().catch(error => { submissionList.textContent = error.message; });
       const picker = el('input', { name: 'file', type: 'file', accept: 'image/jpeg,image/png,image/webp', required: true });
-      content.push(el('h2', {}, 'مساهماتي'), form([line('اختر صورة من جهازك · حتى 5 ميغابايت', picker)], 'رفع المساهمة', async (data, message, formElement) => {
-        if (data.file.size > 5_000_000) throw Error('الحد الأقصى للصورة 5 ميغابايت.');
-        const image = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.onerror = () => reject(Error('تعذّرت قراءة الصورة.'));
-          reader.readAsDataURL(data.file);
-        });
-        await api('/submissions', { subject: subject.id, image });
+      content.push(el('h2', {}, 'مساهماتي'), form([el('p', {}, 'ارفع ورقة دراسية بدون معلومات شخصية. تظهر الصورة للطلاب بعد قبول المساهمة.'), line('اختر صورة من جهازك · حتى 5 ميغابايت', picker)], 'رفع المساهمة', async (data, message, formElement) => {
+        const image = await imageFile(data.file);
+        const submission = await api('/submissions', { subject: subject.id, image });
+        if (submission.state === 'processing') wasProcessing = true;
         formElement.reset();
         await refresh();
       }), submissionList);

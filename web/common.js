@@ -54,8 +54,9 @@ export function errorView(error) {
 export function login(area, ready) {
   nav.replaceChildren();
   app.replaceChildren(el('div', { class: 'login-layout' },
-    el('section', { class: 'hero login-hero' }, el('img', { src: '/icon-192.png', alt: '', width: 88, height: 88 }),
-      el('h1', {}, area === 'admin' ? 'لوحة إدارة الدفعة' : 'منصة الدفعة'),
+    el('section', { class: 'hero login-hero' },
+      area === 'student' && el('img', { class: 'study-illustration', src: '/study.webp', width: 780, height: 520, alt: '' }), el('img', { src: '/icon-192.png', alt: '', width: 88, height: 88 }),
+      el('h1', {}, area === 'admin' ? 'لوحة إدارة قو مدرس' : 'قو مدرس'),
       el('p', {}, area === 'admin' ? 'أدر المحتوى والحسابات من مكان واحد.' : 'موادك ومستنداتك واختباراتك في مكان واحد.')),
     form([el('h2', {}, 'تسجيل الدخول'),
       line('اسم المستخدم', input('username', { autocomplete: 'username', required: true, dir: 'ltr' })),
@@ -69,3 +70,45 @@ export function temporary(ready) {
       'حفظ ومتابعة', async data => { await api('/password', data); ready(await api('/me')); }));
 }
 export const logout = () => button('خروج', async () => { try { await api('/logout', {}); location.reload(); } catch (error) { errorView(error); } });
+
+const archiveDate = new Intl.DateTimeFormat('ar-SY-u-ca-gregory', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+export function archiveView(archive, openDocument, removeImage, filter = '') {
+  const days = new Map();
+  function add(item, build) {
+    if (!days.has(item.day)) days.set(item.day, []);
+    const entry = build();
+    if (entry) days.get(item.day).push(entry);
+  }
+  const query = filter.trim().toLocaleLowerCase();
+  const documentNumbers = new Map();
+  for (const item of archive.documents) {
+    const number = (documentNumbers.get(item.day) || 0) + 1;
+    documentNumbers.set(item.day, number);
+    if (item.title.toLocaleLowerCase().includes(query)) add(item, () => openDocument(item, number));
+  }
+  for (const image of archive.images) {
+    if (!image.title.toLocaleLowerCase().includes(query)) continue;
+    add(image, () => {
+      const label = 'صورة ' + image.number + (image.title ? ' · ' + image.title : '');
+      const url = '/archive-image?id=' + image.id;
+      return el('figure', { class: 'archive-image' },
+        el('details', {}, el('summary', {}, label),
+          el('img', { src: url, alt: label, loading: 'lazy', decoding: 'async' })),
+        removeImage?.(image));
+    });
+  }
+  const groups = [...days].sort(([a], [b]) => b.localeCompare(a)).filter(([, entries]) => entries.length);
+  return groups.length ? groups.map(([day, entries]) => el('section', { class: 'card archive-day' },
+    el('h2', {}, archiveDate.format(new Date(day + 'T12:00:00Z'))), el('div', { class: 'stack' }, entries))) : [empty('ما في صور أو مستندات مطابقة.')];
+}
+
+export function imageFile(file) {
+  if (!file?.size) throw Error('اختر صورة.');
+  if (file.size > 5_000_000) throw Error('الحد الأقصى للصورة 5 ميغابايت.');
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(Error('تعذّرت قراءة الصورة.'));
+    reader.readAsDataURL(file);
+  });
+}

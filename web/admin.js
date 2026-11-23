@@ -1,4 +1,4 @@
-import { app, nav, el, button, heading, line, input, select, api, form, login, temporary, logout, empty, errorView, date } from './common.js';
+import { app, nav, el, button, heading, line, input, select, api, form, login, temporary, logout, empty, errorView, date, archiveView, imageFile } from './common.js';
 
 let me;
 let sequence = 0;
@@ -83,6 +83,32 @@ const documentsPage = show(async () => {
     editor()), el('h2', {}, 'المستندات المنشورة'), ...docs.map(item =>
       el('details', { class: 'card' }, el('summary', {}, item.title + ' · ' + item.subjectName), editor(item)))];
 });
+const archivePage = selected => show(async () => {
+  const subjects = await api('/subjects');
+  const subjectId = selected ?? subjects[0]?.id;
+  if (!subjectId) return [heading('الأرشيف اليومي'), empty('أضف مادة أولًا.')];
+  const archive = await api('/archive?subject=' + subjectId);
+  const reload = archivePage(subjectId);
+  const choice = select('subject', subjects.map(item => [item.id, item.name]));
+  choice.value = String(subjectId);
+  choice.addEventListener('change', () => archivePage(Number(choice.value))());
+  return [heading('الأرشيف اليومي'),
+    line('المادة', choice),
+    el('div', { class: 'grid' },
+      form([line('الصفحة التي وصل إليها الصف', input('page', { type: 'number', min: 1, max: 10000, step: 1, value: archive.page, required: true }))],
+        'حفظ رقم الصفحة', async data => { await api('/progress', { subject: subjectId, page: Number(data.page) }); await reload(); }),
+      form([line('عنوان الصورة', input('title', { maxlength: 160 })),
+        line('التاريخ · يُستخدم تاريخ اليوم إذا تركته فارغًا', input('day', { type: 'date' })),
+        line('اختر صورة', input('file', { type: 'file', accept: 'image/jpeg,image/png,image/webp', required: true }))],
+        'إضافة الصورة', async data => { await api('/archive-image', { subject: subjectId, title: data.title, day: data.day, image: await imageFile(data.file) }); await reload(); })),
+    ...archiveView(archive, (item, number) => el('p', {}, 'مستند ' + number + ' · ' + item.title),
+      image => action('حذف الصورة', async () => {
+        if (!confirm('حذف هذه الصورة من أرشيف المادة؟')) return;
+        await api('/archive-image-remove', { id: image.id });
+        await reload();
+      })),
+  ];
+});
 function quizEditor(subjects, quiz) {
   const questionList = el('div', { class: 'stack' });
   function add(question = { text: '', options: ['', ''], correct: 0 }) {
@@ -166,7 +192,7 @@ function ready(user) {
   nav.replaceChildren(logout());
   if (user.temporary) { temporary(ready); return; }
   nav.prepend(button('الرئيسية', dashboard),
-    ...(owner() ? [button('الحسابات', accountPage), button('المواد والمستندات', documentsPage), button('سجل التغييرات', auditPage)] : []),
+    ...(owner() ? [button('الحسابات', accountPage), button('المواد والمستندات', documentsPage), button('الأرشيف اليومي', archivePage()), button('سجل التغييرات', auditPage)] : []),
     ...(can('quizzes') ? [button('الاختبارات', quizzesPage)] : []),
     ...(can('notices') || can('publishNotices') ? [button('الأخبار والتذكيرات', noticesPage)] : []));
   dashboard();

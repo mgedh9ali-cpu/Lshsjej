@@ -108,3 +108,7 @@ main>.hero,main>.grid,main>.metrics,.login-layout{animation:arrive .25s cubic-be
 button{transition:background-color .16s,border-color .16s,box-shadow .16s,transform .16s}
 @media(max-width:650px){.login-layout{grid-template-columns:1fr}.login-hero img{width:57px;height:57px;border-radius:14px}.metrics .card{padding:.65rem}.metrics .card p{font-size:.82rem}}
 @media(prefers-reduced-motion:reduce){main>.hero,main>.grid,main>.metrics,.login-layout{animation:none}button{transition:none}.subject:hover:not(:disabled){transform:none}}
+.archive-day{display:grid;gap:.75rem}.archive-image{margin:0;padding:.65rem;border:1px solid var(--line);border-radius:12px}.archive-image summary{cursor:pointer;font-weight:650}.archive-image img{display:block;width:auto;max-width:100%;max-height:34rem;border-radius:10px;object-fit:contain}
+.class-progress{border-inline-start:4px solid #45c6a8}.class-progress strong{color:#5030a4;font-size:1.25em}
+.login-hero img.study-illustration{width:100%;height:auto;max-height:15rem;object-fit:cover;object-position:center;border-radius:15px;box-shadow:none}
+@media(max-width:650px){.login-hero img.study-illustration{max-height:9rem}}

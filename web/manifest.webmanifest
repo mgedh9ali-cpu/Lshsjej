@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "منصة الدفعة",
-  "short_name": "الدفعة",
+  "name": "قو مدرس",
+  "short_name": "قو مدرس",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

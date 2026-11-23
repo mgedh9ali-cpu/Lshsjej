@@ -12,6 +12,8 @@ mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 const db = new DatabaseSync(path);
 db.exec(`
 PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS subject_images(id INTEGER PRIMARY KEY, subject INTEGER NOT NULL, day TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL, mime TEXT, content BLOB, UNIQUE(subject, day, number));
+CREATE TABLE IF NOT EXISTS subject_progress(subject INTEGER PRIMARY KEY, page INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, name TEXT, username TEXT UNIQUE, password TEXT, role TEXT, permissions TEXT DEFAULT '[]', temporary INTEGER DEFAULT 1, active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user INTEGER,area TEXT,expires INTEGER);
 CREATE TABLE IF NOT EXISTS subjects(id INTEGER PRIMARY KEY,name TEXT UNIQUE);
@@ -34,6 +36,29 @@ function transaction(fn) {
   db.exec('BEGIN IMMEDIATE');
   try { const result = fn(); db.exec('COMMIT'); return result; }
   catch (error) { db.exec('ROLLBACK'); throw error; }
+}
+if (!all('PRAGMA table_info(documents)').some(column => column.name === 'created')) {
+  transaction(() => {
+    db.exec('ALTER TABLE documents ADD COLUMN created INTEGER');
+    run('UPDATE documents SET created=updated');
+  });
+}
+const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Damascus', dateStyle: 'short' });
+const schoolDay = timestamp => dayFormat.format(timestamp);
+function archive(subjectId) {
+  const documents = all('SELECT id,title,created FROM documents WHERE subject=? ORDER BY id', subjectId);
+  return {
+    documents: documents.map(item => ({ id: item.id, title: item.title, day: schoolDay(item.created) })),
+    images: all('SELECT id,day,number,title FROM subject_images WHERE subject=? AND content IS NOT NULL ORDER BY day DESC,number ASC', subjectId),
+    page: get('SELECT page FROM subject_progress WHERE subject=?', subjectId)?.page ?? null,
+  };
+}
+function insertImage(subjectId, image, title, day) {
+  const bytes = imageData(image);
+  const mime = image.slice(5, image.indexOf(';'));
+  const number = get('SELECT coalesce(max(number),0)+1 AS next FROM subject_images WHERE subject=? AND day=?', subjectId, day).next;
+  return Number(run('INSERT INTO subject_images(subject,day,number,title,mime,content) VALUES(?,?,?,?,?,?)',
+    subjectId, day, number, title, mime, bytes).lastInsertRowid);
 }
 const hash = value => createHash('sha256').update(value).digest('hex');
 function passwordHash(value, salt = randomBytes(16).toString('hex')) {
@@ -170,7 +195,7 @@ async function analyzeImage(image, topics) {
   return JSON.parse((await result.json()).choices[0].message.content);
 }
 let imageQueue = Promise.resolve();
-async function processImage(id, subjectId, image) {
+async function processImage(id, subjectId, image, uploadedAt) {
   try {
     const topics = all('SELECT id,title FROM documents WHERE subject=?', subjectId);
     const result = await analyzeImage(image, topics);
@@ -185,11 +210,12 @@ async function processImage(id, subjectId, image) {
     transaction(() => {
       const duplicate = duplicateTopic(title, body, topics) || topics.find(topic => topic.id === result.duplicateId)
         || get('SELECT id FROM documents WHERE subject=? AND topic=?', subjectId, key);
-      const document = duplicate?.id ?? Number(run('INSERT INTO documents(subject,title,body,topic,updated) VALUES(?,?,?,?,?)', subjectId, title, body, key, Date.now()).lastInsertRowid);
+      const document = duplicate?.id ?? Number(run('INSERT INTO documents(subject,title,body,topic,updated,created) VALUES(?,?,?,?,?,?)', subjectId, title, body, key, Date.now(), uploadedAt).lastInsertRowid);
       run('UPDATE submissions SET state=?,document=? WHERE id=?', duplicate ? 'duplicate' : 'published', document, id);
       if (!duplicate) {
         const author = get('SELECT user AS id FROM submissions WHERE id=?', id);
         audit(author, 'نشر مستند تلقائيًا', title);
+        insertImage(subjectId, image, title, schoolDay(uploadedAt));
       }
     });
   } catch (error) {
@@ -251,6 +277,24 @@ async function api(req, res, area, route, params) {
   }
   if (user.temporary) fail(403, 'غيّر كلمة المرور المؤقتة أولًا.');
   if (method === 'GET' && route === '/subjects') return all('SELECT * FROM subjects');
+  if (method === 'GET' && route === '/archive') {
+    if (area === 'admin') ownerOnly(user);
+    return archive(subject(params.get('subject')).id);
+  }
+  if (method === 'POST' && route === '/archive-image' && area === 'admin') {
+    ownerOnly(user);
+    const data = await json(req, 6_700_000);
+    const subjectId = subject(data.subject).id;
+    const day = data.day || schoolDay(Date.now());
+    if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day)) fail(400, 'اختر تاريخًا صحيحًا.');
+    const parsed = Date.parse(day);
+    if (!Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 10) !== day) fail(400, 'اختر تاريخًا صحيحًا.');
+    return transaction(() => {
+      const id = insertImage(subjectId, data.image, data.title ? field(data.title) : '', day);
+      audit(user, 'إضافة صورة للأرشيف', id);
+      return { id };
+    });
+  }
   if (area === 'student') {
     if (method === 'GET' && route === '/notices') return all('SELECT n.*,s.name AS subjectName FROM notices n LEFT JOIN subjects s ON s.id=n.subject WHERE published=1 AND visible<=? ORDER BY visible DESC', Date.now());
     if (method === 'GET' && route === '/documents') return all('SELECT id,title,updated FROM documents WHERE subject=? ORDER BY id DESC', subject(params.get('subject')).id);
@@ -265,10 +309,11 @@ async function api(req, res, area, route, params) {
       const earlier = get("SELECT document FROM submissions WHERE subject=? AND digest=? AND state IN ('published','duplicate') ORDER BY id LIMIT 1", id, digest);
       const submission = Number(run('INSERT INTO submissions(user,subject,digest,state,document) VALUES(?,?,?,?,?)',
         user.id, id, digest, earlier ? 'duplicate' : 'processing', earlier?.document ?? null).lastInsertRowid);
+      const uploadedAt = Date.now();
       if (!earlier) imageQueue = imageQueue.then(() => {
         const saved = get("SELECT document FROM submissions WHERE subject=? AND digest=? AND state IN ('published','duplicate') ORDER BY id LIMIT 1", id, digest);
         if (saved) run("UPDATE submissions SET state='duplicate',document=? WHERE id=?", saved.document, submission);
-        else return processImage(submission, id, data.image);
+        else return processImage(submission, id, data.image, uploadedAt);
       }).catch(error => console.error(error));
       return { id: submission, state: earlier ? 'duplicate' : 'processing', document: earlier?.document };
     }
@@ -366,6 +411,21 @@ async function api(req, res, area, route, params) {
         audit(user, 'إضافة مادة', name);
         return {};
       }
+      case '/archive-image-remove': {
+        ownerOnly(user);
+        const id = Number(data.id);
+        if (!run("UPDATE subject_images SET content=NULL,mime=NULL,title='' WHERE id=? AND content IS NOT NULL", id).changes) fail(404, 'الصورة غير موجودة.');
+        audit(user, 'حذف صورة من الأرشيف', id);
+        return {};
+      }
+      case '/progress': {
+        ownerOnly(user);
+        const subjectId = subject(data.subject).id;
+        if (!Number.isInteger(data.page) || data.page < 1 || data.page > 10000) fail(400, 'أدخل رقم صفحة صحيحًا بين 1 و10000.');
+        run('INSERT INTO subject_progress(subject,page) VALUES(?,?) ON CONFLICT(subject) DO UPDATE SET page=excluded.page', subjectId, data.page);
+        audit(user, 'تحديث صفحة المادة', subjectId + ': ' + data.page);
+        return {};
+      }
       case '/documents': {
         ownerOnly(user);
         const title = field(data.title);
@@ -377,7 +437,7 @@ async function api(req, res, area, route, params) {
         if (existing && existing.id !== Number(data.id)) fail(409, 'الموضوع موجود مسبقًا.');
         if (data.id) {
           if (!run('UPDATE documents SET title=?,body=?,topic=?,updated=? WHERE id=? AND subject=?', title, body, topic, Date.now(), Number(data.id), selected).changes) fail(404, 'المستند غير موجود.');
-        } else run('INSERT INTO documents(subject,title,body,topic,updated) VALUES(?,?,?,?,?)', selected, title, body, topic, Date.now());
+        } else run('INSERT INTO documents(subject,title,body,topic,updated,created) VALUES(?,?,?,?,?,?)', selected, title, body, topic, Date.now(), Date.now());
         audit(user, data.id ? 'تعديل مستند' : 'إضافة مستند', title);
         return {};
       }
@@ -421,6 +481,7 @@ async function api(req, res, area, route, params) {
 }
 
 const staticFiles = {
+  '/study.webp': ['study.webp', 'image/webp'],
   '/icon-192.png': ['icon-192.png', 'image/png'],
   '/icon-512.png': ['icon-512.png', 'image/png'],
   '/fonts/cairo-arabic.woff2': ['fonts/cairo-arabic-wght-normal.woff2', 'font/woff2'],
@@ -439,6 +500,16 @@ function serve(area, port) {
     res.setHeader('Content-Security-Policy', "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
     try {
       const url = new URL(req.url, 'http://localhost');
+      if (req.method === 'GET' && url.pathname === '/archive-image') {
+        const user = authenticate(req, area);
+        if (user.temporary) fail(403, 'غيّر كلمة المرور أولًا.');
+        if (area === 'admin') ownerOnly(user);
+        const image = get('SELECT mime,content FROM subject_images WHERE id=? AND content IS NOT NULL', Number(url.searchParams.get('id')));
+        if (!image) fail(404, 'الصورة غير موجودة.');
+        res.setHeader('Content-Type', image.mime);
+        res.end(Buffer.from(image.content));
+        return;
+      }
       if (url.pathname.startsWith('/api/')) {
         if (req.method === 'POST' && req.headers.origin && req.headers.origin !== (origin || 'http://' + req.headers.host)) fail(403, 'أصل الطلب غير مسموح.');
         if (req.method === 'POST' && req.headers['sec-fetch-site'] === 'cross-site') fail(403, 'أصل الطلب غير مسموح.');
