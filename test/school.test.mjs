@@ -83,6 +83,10 @@ test('separate interfaces, owner approvals, private results, notices and image d
   assert.equal((await admin('/me', undefined, learner.cookie)).status, 401);
   assert.equal((await student('/subjects')).status, 403);
   assert.equal((await student('/password', { password: 'revised-student-key' })).status, 200);
+  assert.equal((await student('/suggestions', { body: 'أضفوا تمارين للمراجعة' })).status, 200);
+  assert.equal((await student('/suggestions')).status, 404);
+  assert.equal((await admin('/suggestions', undefined, assistant.cookie)).status, 403);
+  assert.equal((await admin('/suggestions')).body[0].body, 'أضفوا تمارين للمراجعة');
   const subjects = (await student('/subjects')).body;
   assert.equal(subjects.length, 5);
   const subject = subjects[0].id;

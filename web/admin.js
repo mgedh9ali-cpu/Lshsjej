@@ -187,12 +187,18 @@ const dashboard = show(async () => {
       el('div', { class: 'metrics' }, metric('قيد المعالجة', overview.processing), metric('موضوعات مكررة', overview.duplicates), metric('تحتاج إعادة رفع', overview.needsRetry))),
   ].filter(Boolean);
 });
+const suggestionsPage = show(async () => {
+  const entries = await api('/suggestions');
+  return [heading('اقتراحات الطلاب'), ...(entries.length ? entries.map(item => card(
+    el('strong', {}, item.name), el('p', { class: 'prose' }, item.body), el('small', {}, date(item.created)))) :
+    [empty('ما وصل أي اقتراح بعد.')])];
+});
 function ready(user) {
   me = user;
   nav.replaceChildren(logout());
   if (user.temporary) { temporary(ready); return; }
   nav.prepend(button('الرئيسية', dashboard),
-    ...(owner() ? [button('الحسابات', accountPage), button('المواد والمستندات', documentsPage), button('الأرشيف اليومي', archivePage()), button('سجل التغييرات', auditPage)] : []),
+    ...(owner() ? [button('الحسابات', accountPage), button('اقتراحات الطلاب', suggestionsPage), button('المواد والمستندات', documentsPage), button('الأرشيف اليومي', archivePage()), button('سجل التغييرات', auditPage)] : []),
     ...(can('quizzes') ? [button('الاختبارات', quizzesPage)] : []),
     ...(can('notices') || can('publishNotices') ? [button('الأخبار والتذكيرات', noticesPage)] : []));
   dashboard();

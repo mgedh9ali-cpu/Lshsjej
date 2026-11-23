@@ -264,16 +264,116 @@ public final class MainActivity extends Activity {
         return MessageDigest.isEqual(stored, localHash(password, salt)) && name.equals(data.getString("name", ""));
     }
 
+    private android.database.sqlite.SQLiteDatabase openStudentCatalog() throws java.io.IOException {
+        java.io.File file = new java.io.File(getCacheDir(), "student-0.4.4.sqlite");
+        if (!file.exists()) {
+            java.io.File staging = java.io.File.createTempFile("student-", ".tmp", getCacheDir());
+            try {
+                try (java.io.InputStream source = getAssets().open("student.sqlite");
+                     java.io.FileOutputStream target = new java.io.FileOutputStream(staging)) {
+                    byte[] buffer = new byte[4096];
+                    int length;
+                    while ((length = source.read(buffer)) != -1) target.write(buffer, 0, length);
+                }
+                if (!staging.renameTo(file)) throw new java.io.IOException("Could not install student database");
+            } finally { staging.delete(); }
+        }
+        return android.database.sqlite.SQLiteDatabase.openDatabase(file.getPath(), null,
+            android.database.sqlite.SQLiteDatabase.OPEN_READONLY);
+    }
+
+    private Button section(LinearLayout parent, String label, View.OnClickListener handler) {
+        Button button = primary(label);
+        add(parent, button, 10);
+        button.setOnClickListener(handler);
+        return button;
+    }
+
+    private LinearLayout localSection(String name, String title) {
+        LinearLayout screen = panel();
+        banner(screen, title, "قوم دروس");
+        section(screen, "العودة للرئيسية", view -> showLocalHome(name));
+        return screen;
+    }
+
     private void showLocalHome(String name) {
         localHomeOpen = true;
         LinearLayout screen = panel();
-        banner(screen, "أهلًا، " + name, "دفترك الدراسي على هذا الهاتف");
+        banner(screen, "أهلًا، " + name, "قوم دروس");
+        LinearLayout tools = card(screen);
+        section(tools, "المواد الدراسية", view -> showLocalSubjects(name));
+        section(tools, "الأخبار والتحديثات", view -> showLocalUpdates(name));
+        section(tools, "ملاحظاتي", view -> showLocalNotes(name, 0));
+        section(tools, "اقتراحات", view -> showLocalSuggestion(name));
+        Button logout = new Button(this);
+        logout.setText("تسجيل الخروج");
+        add(screen, logout, 12);
+        logout.setOnClickListener(view -> setup(""));
+    }
+
+    private String[] localSubjects() {
+        java.util.List<String> names = new java.util.ArrayList<>();
+        try (android.database.sqlite.SQLiteDatabase db = openStudentCatalog();
+             android.database.Cursor rows = db.rawQuery("SELECT name FROM subjects ORDER BY id", null)) {
+            while (rows.moveToNext()) names.add(rows.getString(0));
+        } catch (Exception error) { android.util.Log.e("QumDorous", "Unable to open subject catalog", error); }
+        return names.toArray(new String[0]);
+    }
+
+    private void showLocalSubjects(String name) {
+        LinearLayout screen = localSection(name, "المواد الدراسية");
+        String[] subjects = localSubjects();
+        if (subjects.length == 0) add(card(screen), text("تعذّر فتح المواد.", 16, MUTED, false), 0);
+        for (int index = 0; index < subjects.length; index++) {
+            final int subject = index;
+            LinearLayout item = card(screen);
+            add(item, text(subjects[index], 19, INK, true), 0);
+            section(item, "ملاحظات المادة", view -> showLocalNotes(name, subject));
+        }
+    }
+
+    private void showLocalUpdates(String name) {
+        LinearLayout screen = localSection(name, "الأخبار والتحديثات");
+        try (android.database.sqlite.SQLiteDatabase db = openStudentCatalog();
+             android.database.Cursor rows = db.rawQuery("SELECT title,body FROM updates ORDER BY id DESC", null)) {
+            while (rows.moveToNext()) {
+                LinearLayout item = card(screen);
+                add(item, text(rows.getString(0), 19, INK, true), 0);
+                add(item, text(rows.getString(1), 15, MUTED, false), 6);
+            }
+        } catch (Exception error) {
+            add(card(screen), text("تعذّر تحميل التحديثات المحلية.", 16, MUTED, false), 0);
+        }
+    }
+
+    private void showLocalSuggestion(String name) {
+        LinearLayout card = card(localSection(name, "اقتراحات"));
+        add(card, text("المسودة تحفظ على الهاتف. الإرسال للمالك متاح عند تشغيل النسخة المتصلة.", 15, MUTED, false), 0);
+        EditText entry = field(card, "اقتراحك", InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        entry.setSingleLine(false);
+        entry.setMinLines(4);
+        entry.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2000)});
+        entry.setText(localData().getString("suggestion_draft", ""));
+        TextView status = text("", 14, MUTED, false);
+        section(card, "حفظ المسودة", view -> {
+            localData().edit().putString("suggestion_draft", entry.getText().toString()).apply();
+            status.setText("حُفظت المسودة.");
+        });
+        add(card, status, 8);
+    }
+
+    private void showLocalNotes(String name, int index) {
+        LinearLayout screen = localSection(name, "ملاحظاتي");
         LinearLayout card = card(screen);
-        add(card, text("ملاحظات المواد", 22, INK, true), 0);
-        String[] subjects = {"الفيزياء", "الكيمياء", "العلوم", "الإنجليزي", "الرياضيات"};
+        String[] subjects = localSubjects();
+        if (subjects.length == 0) {
+            add(card, text("تعذّر فتح المواد.", 16, MUTED, false), 0);
+            return;
+        }
         Spinner picker = new Spinner(this);
         ArrayAdapter<String> choices = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, subjects);
         picker.setAdapter(choices);
+        picker.setSelection(index);
         add(card, picker, 12);
         EditText note = field(card, "ملاحظتك", InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         note.setSingleLine(false);
@@ -293,10 +393,6 @@ public final class MainActivity extends Activity {
             localData().edit().putString("note_" + picker.getSelectedItemPosition(), note.getText().toString()).apply();
             status.setText("حُفظت على هذا الهاتف.");
         });
-        Button logout = new Button(this);
-        logout.setText("تسجيل الخروج");
-        add(screen, logout, 12);
-        logout.setOnClickListener(view -> setup(""));
     }
 
     private static String httpsOrigin(String input) throws Exception {

@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS submissions(id INTEGER PRIMARY KEY,user INTEGER,subje
 CREATE INDEX IF NOT EXISTS submission_image ON submissions(subject,digest,state);
 CREATE TABLE IF NOT EXISTS quizzes(id INTEGER PRIMARY KEY,subject INTEGER,title TEXT,questions TEXT,published INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS attempts(id INTEGER PRIMARY KEY,user INTEGER,quiz INTEGER,score INTEGER,total INTEGER,created INTEGER);
+CREATE TABLE IF NOT EXISTS suggestions(id INTEGER PRIMARY KEY, student INTEGER NOT NULL, body TEXT NOT NULL, created INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS notices(id INTEGER PRIMARY KEY,kind TEXT,title TEXT,body TEXT,subject INTEGER,visible INTEGER,published INTEGER);
 CREATE INDEX IF NOT EXISTS attempts_learner ON attempts(user,id);
 CREATE INDEX IF NOT EXISTS quizzes_subject ON quizzes(subject,published,id);
@@ -305,6 +306,12 @@ async function api(req, res, area, route, params) {
     });
   }
   if (area === 'student') {
+    if (method === 'POST' && route === '/suggestions') {
+      limit('suggestions:' + user.id, 10, 600000);
+      const data = await json(req, 16_384);
+      const id = run('INSERT INTO suggestions(student,body,created) VALUES(?,?,?)', user.id, field(data.body, 2000), Date.now()).lastInsertRowid;
+      return { id: Number(id) };
+    }
     if (method === 'GET' && route === '/notices') return all('SELECT n.*,s.name AS subjectName FROM notices n LEFT JOIN subjects s ON s.id=n.subject WHERE published=1 AND visible<=? ORDER BY visible DESC', Date.now());
     if (method === 'GET' && route === '/documents') return all('SELECT id,title,updated FROM documents WHERE subject=? ORDER BY id DESC', subject(params.get('subject')).id);
     if (method === 'GET' && route === '/document') return get('SELECT d.*,s.name AS subjectName FROM documents d JOIN subjects s ON s.id=d.subject WHERE d.id=?', Number(params.get('id'))) ?? fail(404, 'المستند غير موجود.');
@@ -354,6 +361,10 @@ async function api(req, res, area, route, params) {
   if (method === 'GET' && route === '/notices') {
     if (!can(user, 'notices') && !can(user, 'publishNotices')) fail(403, 'هذه الصفحة تحتاج صلاحية الأخبار.');
     return all('SELECT * FROM notices ORDER BY id DESC');
+  }
+  if (method === 'GET' && route === '/suggestions') {
+    ownerOnly(user);
+    return all('SELECT s.id,s.body,s.created,u.name FROM suggestions s JOIN users u ON u.id=s.student ORDER BY s.id DESC LIMIT 200');
   }
   if (method === 'GET' && route === '/overview') {
     ownerOnly(user);

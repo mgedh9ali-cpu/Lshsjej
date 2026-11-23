@@ -19,7 +19,7 @@ const home = display(async () => {
   return [heading('المواد الدراسية', 'اختر مادة لتفتح مستنداتها واختباراتها.'), el('div', { class: 'grid' }, subjects.map((item, index) =>
     button([el('span', { class: 'subject-icon', 'aria-hidden': 'true' }, ['⚡', '◇', '✿', 'Aa', '∑'][index % 5]), item.name], subjectPage(item), 'card subject')))];
 });
-const news = display(async () => [heading('الأخبار والتذكيرات'), noticeList(await api('/notices'))]);
+const news = display(async () => [heading('الأخبار والتحديثات'), noticeList(await api('/notices'))]);
 const results = display(async () => {
   const items = await api('/results');
   return [heading('نتائجي'), items.length ? el('div', { class: 'stack' }, items.map(item =>
@@ -98,10 +98,31 @@ const quizPage = (subject, id) => display(async () => {
         button('العودة للاختبارات', subjectPage(subject, 'quizzes')));
     })];
 });
+const suggestions = display(async () => [heading('اقتراحات'), form([
+  line('اقتراحك', el('textarea', { name: 'body', rows: 5, maxlength: 2000, required: true })),
+], 'إرسال للمالك', async (data, message, formElement) => {
+  await api('/suggestions', { body: data.body });
+  formElement.reset();
+  message.textContent = 'وصل اقتراحك إلى لوحة المالك.';
+})]);
+const notes = user => display(async () => {
+  const subjects = await api('/subjects');
+  if (!subjects.length) return [heading('ملاحظاتي'), empty('ما في مواد بعد.')];
+  const picker = el('select', { name: 'subject' }, subjects.map(item => el('option', { value: item.id }, item.name)));
+  const note = el('textarea', { name: 'note', rows: 6, maxlength: 8000 });
+  const key = () => 'school-note:' + user.id + ':' + picker.value;
+  const read = () => { note.value = localStorage.getItem(key()) || ''; };
+  picker.addEventListener('change', read);
+  read();
+  return [heading('ملاحظاتي'), form([line('المادة', picker), line('ملاحظتك', note)], 'حفظ على هذا الجهاز', (data, message) => {
+    localStorage.setItem(key(), data.note);
+    message.textContent = 'حُفظت الملاحظة على هذا الجهاز.';
+  })];
+});
 function ready(user) {
   nav.replaceChildren(el('span', { class: 'identity' }, user.name), logout());
   if (user.temporary) { temporary(ready); return; }
-  nav.prepend(button('المواد', home), button('الأخبار والتذكيرات', news), button('نتائجي', results));
+  nav.prepend(button('المواد', home), button('الأخبار والتحديثات', news), button('ملاحظاتي', notes(user)), button('اقتراحات', suggestions), button('نتائجي', results));
   home();
 }
 api('/me').then(ready).catch(error => error.status === 401 ? login('student', ready) : errorView(error));
