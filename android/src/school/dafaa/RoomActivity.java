@@ -21,6 +21,8 @@ public final class RoomActivity extends Activity {
     private ValueCallback<Uri[]> picker;
     private String token="";
     private String remote;
+    private String backupPassword;
+    private String restorePassword;
     @Override public void onCreate(Bundle saved){
         super.onCreate(saved);
         owner="school.dafaa.owner".equals(getPackageName());
@@ -90,6 +92,29 @@ public final class RoomActivity extends Activity {
                         if(!sameClass){token="";editor.remove("studentToken").remove("studentName");}
                         editor.apply();
                         value=RoomStore.obj("retained",sameClass&&!token.isEmpty());
+                    }else if(owner&&op.equals("backup")){
+                        backupPassword=RoomStore.check(p,"password",200);
+                        if(backupPassword.length()<12)throw new Exception("اختر كلمة مرور للنسخة من 12 حرفًا على الأقل.");
+                        runOnUiThread(()->{
+                            Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                            intent.addCategory(Intent.CATEGORY_OPENABLE);
+                            intent.setType("application/octet-stream");
+                            intent.putExtra(Intent.EXTRA_TITLE,"QumDorous-classroom-"+new java.text.SimpleDateFormat("yyyy-MM-dd",java.util.Locale.US).format(new java.util.Date())+".qdb");
+                            try{startActivityForResult(intent,90);}
+                            catch(Exception e){backupPassword=null;noticeBackup(false,"تعذّر فتح نافذة حفظ النسخة.");}
+                        });
+                        value=RoomStore.obj("started",true);
+                    }else if(owner&&op.equals("restore")){
+                        restorePassword=RoomStore.check(p,"password",200);
+                        if(restorePassword.length()<12)throw new Exception("أدخل كلمة مرور النسخة الاحتياطية.");
+                        runOnUiThread(()->{
+                            Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                            intent.addCategory(Intent.CATEGORY_OPENABLE);
+                            intent.setType("*/*");
+                            try{startActivityForResult(intent,91);}
+                            catch(Exception e){restorePassword=null;noticeBackup(false,"تعذّر فتح نافذة اختيار النسخة.");}
+                        });
+                        value=RoomStore.obj("started",true);
                     }else if(owner&&op.equals("share")){
                         store.handle(true,"device",RoomStore.obj("op","home","token",token));
                         link.start();String code=link.invitation();sharing=true;
@@ -123,9 +148,47 @@ public final class RoomActivity extends Activity {
             });
         }
     }
+    private void noticeBackup(boolean success,String message){
+        if(web==null||isDestroyed())return;
+        web.evaluateJavascript("window.backupComplete("+success+","+JSONObject.quote(message)+")",null);
+    }
     @Override protected void onActivityResult(int code,int result,Intent data){
         super.onActivityResult(code,result,data);
-        if(code==89&&picker!=null){Uri u=result==RESULT_OK&&data!=null?data.getData():null;picker.onReceiveValue(u!=null&&"content".equals(u.getScheme())?new Uri[]{u}:null);picker=null;}
+        if(code==89&&picker!=null){
+            Uri u=result==RESULT_OK&&data!=null?data.getData():null;
+            picker.onReceiveValue(u!=null&&"content".equals(u.getScheme())?new Uri[]{u}:null);
+            picker=null;
+            return;
+        }
+        if(code!=90&&code!=91)return;
+        final boolean exporting=code==90;
+        final String pass=exporting?backupPassword:restorePassword;
+        backupPassword=null;restorePassword=null;
+        final Uri file=result==RESULT_OK&&data!=null?data.getData():null;
+        if(file==null||pass==null){noticeBackup(false,"أُلغيت العملية دون تغيير البيانات.");return;}
+        tasks.execute(()->{
+            try{
+                if(exporting){
+                    try(java.io.OutputStream out=getContentResolver().openOutputStream(file,"w")){
+                        if(out==null)throw new Exception("تعذّر إنشاء ملف النسخة.");
+                        store.writeEncryptedBackup(out,pass);
+                    }
+                    runOnUiThread(()->noticeBackup(true,"حُفظت نسخة احتياطية مشفّرة. احتفظ بكلمة المرور لاستعادتها."));
+                }else{
+                    try(java.io.InputStream in=getContentResolver().openInputStream(file)){
+                        if(in==null)throw new Exception("تعذّر قراءة ملف النسخة.");
+                        store.restoreEncryptedBackup(in,pass);
+                    }
+                    runOnUiThread(()->{
+                        android.widget.Toast.makeText(this,"تمت استعادة البيانات. ستُعاد فتح لوحة المالك.",android.widget.Toast.LENGTH_LONG).show();
+                        Intent restart=new Intent(this,RoomActivity.class);
+                        finish();startActivity(restart);
+                    });
+                }
+            }catch(Exception failure){
+                runOnUiThread(()->noticeBackup(false,RoomLink.safe(failure)));
+            }
+        });
     }
     @Override public void onBackPressed(){web.evaluateJavascript("window.backPage ? backPage() : false",v->{if("false".equals(v))super.onBackPressed();});}
     @Override protected void onDestroy(){if(link!=null)link.close();tasks.shutdownNow();if(picker!=null)picker.onReceiveValue(null);web.removeJavascriptInterface("Classroom");web.destroy();super.onDestroy();}
