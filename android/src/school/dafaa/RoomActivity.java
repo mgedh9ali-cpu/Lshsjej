@@ -197,7 +197,7 @@ public final class RoomActivity extends Activity {
                         }else if(op.equals("logout")){
                             token="";
                             getPreferences(MODE_PRIVATE).edit().remove(owner?"ownerToken":"studentToken").remove(owner?"ownerName":"studentName").apply();
-                            if(owner&&sharing){registration.close();link.close();link=new RoomLink(store,this::registrationArrived);sharing=false;runOnUiThread(()->getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));}
+                            if(owner&&sharing){registration.close();link.close();link=new RoomLink(store,RoomActivity.this::registrationArrived);sharing=false;runOnUiThread(()->getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));}
                         }
                     }
                     result=RoomStore.obj("value",value);
