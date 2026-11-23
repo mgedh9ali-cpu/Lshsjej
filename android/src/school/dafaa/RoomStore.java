@@ -81,7 +81,7 @@ final class RoomStore {
         if(pass.length()<8)throw new Exception("كلمة السر تحتاج ثمانية أحرف على الأقل.");
         if(rows("SELECT name FROM accounts WHERE name=?",name).length()>0)throw new Exception("الاسم مستخدم بالفعل.");
         String salt=random(18);
-        db.execSQL("INSERT INTO accounts VALUES(?,?,?,?)",new Object[]{name,salt,Base64.encodeToString(hash(pass,salt),Base64.NO_WRAP),owner?1:0});
+        db.execSQL("INSERT INTO accounts(name,salt,verifier,owner) VALUES(?,?,?,?)",new Object[]{name,salt,Base64.encodeToString(hash(pass,salt),Base64.NO_WRAP),owner?1:0});
     }
     private void rate(String key,int max,long period)throws Exception{
         long now=System.currentTimeMillis();long[] a=attempts.get(key);
