@@ -27,6 +27,7 @@ public final class RoomActivity extends Activity {
         base=owner?"https://room.invalid/":"https://classroom.invalid/";
         if(owner){store=new RoomStore(this);link=new RoomLink(store);}
         token=getPreferences(MODE_PRIVATE).getString(owner?"ownerToken":"studentToken","");
+        unlocked=getSharedPreferences("offline_student",MODE_PRIVATE).getBoolean("remembered",false);
         remote=getPreferences(MODE_PRIVATE).getString("invite","");
         web=new WebView(this);web.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         android.widget.FrameLayout frame=new android.widget.FrameLayout(this);
@@ -66,13 +67,13 @@ public final class RoomActivity extends Activity {
                     JSONObject p=new JSONObject(raw);String op=p.getString("op");
                     Object value;
                     if(op.equals("boot"))value=RoomStore.obj("owner",owner,"studentName",token.isEmpty()?"":getPreferences(MODE_PRIVATE).getString(owner?"ownerName":"studentName",""),"savedSession",!token.isEmpty(),"locked",!unlocked&&getSharedPreferences("offline_student",MODE_PRIVATE).contains("hash"),"paired",!remote.isEmpty(),"setup",owner&&((JSONObject)store.handle(true,"device",RoomStore.obj("op","status"))).optBoolean("setup"));
-                    else if(!owner&&op.equals("lock")){unlocked=false;value=RoomStore.obj();}
+                    else if(!owner&&op.equals("lock")){unlocked=false;getSharedPreferences("offline_student",MODE_PRIVATE).edit().putBoolean("remembered",false).apply();value=RoomStore.obj();}
                     else if(!owner&&op.equals("unlock")){
                         android.content.SharedPreferences old=getSharedPreferences("offline_student",MODE_PRIVATE);
                         byte[] salt=android.util.Base64.decode(old.getString("salt",""),0);
                         byte[] digest=android.util.Base64.decode(old.getString("hash",""),0);
                         if(!java.security.MessageDigest.isEqual(digest,MainActivity.localHash(p.getString("password").toCharArray(),salt)) || !old.getString("name","").equals(p.getString("name")))throw new Exception("الاسم أو كلمة السر غير صحيحة.");
-                        unlocked=true;value=RoomStore.obj();
+                        unlocked=true;old.edit().putBoolean("remembered",true).apply();value=RoomStore.obj();
                     }else if(!owner&&op.equals("notes")){
                         runOnUiThread(()->startActivity(new Intent(RoomActivity.this,MainActivity.class).putExtra("savedNotes",true)));
                         value=RoomStore.obj();
