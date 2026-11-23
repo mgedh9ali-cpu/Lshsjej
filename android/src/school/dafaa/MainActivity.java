@@ -74,11 +74,12 @@ public final class MainActivity extends Activity {
                 return;
             } catch (Exception ignored) {}
         }
-        if (origin.isEmpty() && !getSharedPreferences("room_mode",MODE_PRIVATE).getBoolean("prefer_offline",false) && state == null) {
+        if(getIntent().getBooleanExtra("savedNotes",false)){
             setup("");
+        }else if(origin.isEmpty()){
             openClassroom();
-        } else if (origin.isEmpty()) setup("");
-        else openStudentApp();
+            finish();
+        }else openStudentApp();
     }
 
     private void openClassroom() { startActivity(new Intent(this,RoomActivity.class)); }
@@ -204,7 +205,7 @@ public final class MainActivity extends Activity {
 
     private SharedPreferences localData() { return getSharedPreferences("offline_student", MODE_PRIVATE); }
 
-    private static byte[] localHash(char[] password, byte[] salt) throws Exception {
+    static byte[] localHash(char[] password, byte[] salt) throws Exception {
         PBEKeySpec spec = new PBEKeySpec(password, salt, 210000, 256);
         try { return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1").generateSecret(spec).getEncoded(); }
         finally { spec.clearPassword(); java.util.Arrays.fill(password, '\0'); }
@@ -265,7 +266,8 @@ public final class MainActivity extends Activity {
                 final boolean success = entered;
                 runOnUiThread(() -> {
                     if (isDestroyed() || isFinishing()) return;
-                    if (success) showLocalHome(enteredName);
+                    if (success && getIntent().getBooleanExtra("savedNotes",false)) showLocalNotes(enteredName,0);
+                    else if (success) showLocalHome(enteredName);
                     else {
                         status.setText(first ? "تعذّر إنشاء الحساب. حاول مجددًا." : "تحقّق من الاسم وكلمة السر.");
                         status.postDelayed(() -> submit.setEnabled(true), 900);
@@ -608,6 +610,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
+        if(getIntent().getBooleanExtra("savedNotes",false)){finish();return;}
         if (localName != null && !atHome) { leaveSources(localName); return; }
         if (web != null && web.canGoBack()) web.goBack();
         else super.onBackPressed();
