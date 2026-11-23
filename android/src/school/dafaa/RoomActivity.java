@@ -82,7 +82,14 @@ public final class RoomActivity extends Activity {
                         String code=p.getString("invite").trim();
                         JSONObject response=RoomLink.call(code,RoomStore.obj("op","status"));
                         if(!response.has("value"))throw new Exception("تحقّق من رمز الصف.");
-                        getSharedPreferences("room_mode",MODE_PRIVATE).edit().putBoolean("prefer_offline",false).apply();remote=code;token="";getPreferences(MODE_PRIVATE).edit().putString("invite",code).remove("studentToken").remove("studentName").apply();value=RoomStore.obj();
+                        getSharedPreferences("room_mode",MODE_PRIVATE).edit().putBoolean("prefer_offline",false).apply();
+                        String[] previous=remote.split("/"),current=code.split("/");
+                        boolean sameClass=previous.length==3&&current.length==3&&previous[2].equals(current[2]);
+                        remote=code;
+                        android.content.SharedPreferences.Editor editor=getPreferences(MODE_PRIVATE).edit().putString("invite",code);
+                        if(!sameClass){token="";editor.remove("studentToken").remove("studentName");}
+                        editor.apply();
+                        value=RoomStore.obj("retained",sameClass&&!token.isEmpty());
                     }else if(owner&&op.equals("share")){
                         store.handle(true,"device",RoomStore.obj("op","home","token",token));
                         link.start();String code=link.invitation();sharing=true;
