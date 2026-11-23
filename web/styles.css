@@ -1,5 +1,3 @@
-@font-face{font-family:Thmanyah;src:url("/fonts/thmanyahsans-Regular.woff2") format("woff2");font-weight:400 500;font-display:swap}
-@font-face{font-family:Thmanyah;src:url("/fonts/thmanyahsans-Bold.woff2") format("woff2");font-weight:600 900;font-display:swap}
 :root{font-family:Thmanyah,"Noto Sans Arabic",Tahoma,system-ui,sans-serif;line-height:1.65;color:#152b28;background:#f2f6f2;--green:#105943;--line:#d7e4dc;--muted:#46635a}
 *{box-sizing:border-box}
 body{margin:0}
@@ -70,3 +68,43 @@ summary{min-height:48px;display:list-item;align-content:center}
 input[type=file]::file-selector-button{border:0;border-radius:.45rem;background:#e2f0e8;color:#104e3d;padding:.5rem;margin-inline-end:.6rem;font:inherit;cursor:pointer}
 @media(max-width:560px){header{align-items:flex-start;gap:.55rem}nav{width:100%}main{padding-top:.85rem}.grid{gap:.65rem}.student .subject{min-height:76px}.student nav button{flex-grow:1}.student nav .identity{flex-basis:100%}}
 @media(prefers-reduced-motion:reduce){button{transition:none}}
+@font-face{font-family:Cairo;src:url("/fonts/cairo-arabic.woff2") format("woff2");font-weight:200 1000;font-display:swap;unicode-range:U+0600-06FF,U+0750-077F,U+0870-08FF,U+FB50-FDFF,U+FE70-FEFF}
+@font-face{font-family:Cairo;src:url("/fonts/cairo-latin.woff2") format("woff2");font-weight:200 1000;font-display:swap;unicode-range:U+0000-00FF,U+2000-206F,U+2212,U+2215}
+:root{font-family:Thmanyah,Cairo,Tahoma,system-ui,sans-serif;color:#211943;background:#f6f4fc;--green:#5234ab;--line:#e0d8f3;--muted:#655a7c;--radius:18px}
+body.admin{background:#f2f1f8}
+header{position:relative;border-color:#e9e3f5;box-shadow:none}
+.brand{color:#30215e}
+.brand-mark{width:42px;height:42px;object-fit:cover;border-radius:13px}
+main{max-width:1160px;gap:1.05rem}
+.hero,.admin .hero{position:relative;overflow:hidden;background:radial-gradient(ellipse at 0% 130%,#6a42bc,transparent 60%),linear-gradient(120deg,#211447,#3a2376);border:0;border-radius:22px;padding:clamp(1.3rem,4vw,3rem);isolation:isolate}
+.hero::before,.hero::after{content:"";width:12rem;aspect-ratio:1;border:1px solid #8df8d845;position:absolute;inset-inline-end:1rem;inset-block-start:-7rem;border-radius:50%;z-index:-1;pointer-events:none}
+.hero::after{width:16rem;inset-inline-end:-2rem;inset-block-start:-9rem}
+.hero p{color:#e2d9f8}
+.card{box-shadow:0 5px 22px #2718550c}
+.primary{background:#5030a4;border-color:#5030a4}
+.primary:hover:not(:disabled){background:#3e247f}
+.secondary,.subject,.list-button{color:#463085}
+.secondary:hover:not(:disabled),.list-button:hover:not(:disabled){background:#f0eafa;border-color:#b7a6dc}
+.subject:hover:not(:disabled){border-color:#a18cd0;box-shadow:0 10px 22px #38216e18;transform:translateY(-2px)}
+.subject-icon{color:#5030a4;background:#eee5ff}
+.subject:nth-child(2n) .subject-icon{color:#08644f;background:#ddf8ee}
+.subject:nth-child(3n) .subject-icon{color:#873f20;background:#ffeddc}
+button[aria-pressed="true"]{background:#5030a4;border-color:#5030a4}
+.field :is(input,textarea,select){border-color:#c9bddf;background:#fdfbff;color:#211943}
+input[type=file]::file-selector-button{background:#eee5ff;color:#463085}
+.tag{background:#ddf8ee;color:#106049}
+.login-layout{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:1rem;margin-block:clamp(.4rem,5vh,3rem);align-items:stretch}
+.login-layout .form{padding:clamp(1.15rem,4vw,2rem);margin:0}
+.login-hero{display:grid;align-content:center;gap:.7rem}
+.login-hero img{border-radius:22px;box-shadow:0 10px 32px #170b3e80}
+.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.65rem}
+.metric-value{font-size:clamp(1.4rem,4vw,2.25rem);color:#5030a4;line-height:1.2}
+.metrics .card p{line-height:1.55;color:#544767}
+.processing-panel .metrics{margin-top:.7rem}
+.processing-panel .metrics .card{background:#f7f3ff;box-shadow:none}
+.shortcuts .subject{min-height:68px}
+@keyframes arrive{from{opacity:.25;transform:translateY(9px)}to{opacity:1;transform:translateY(0)}}
+main>.hero,main>.grid,main>.metrics,.login-layout{animation:arrive .25s cubic-bezier(.2,.7,.3,1) both}
+button{transition:background-color .16s,border-color .16s,box-shadow .16s,transform .16s}
+@media(max-width:650px){.login-layout{grid-template-columns:1fr}.login-hero img{width:57px;height:57px;border-radius:14px}.metrics .card{padding:.65rem}.metrics .card p{font-size:.82rem}}
+@media(prefers-reduced-motion:reduce){main>.hero,main>.grid,main>.metrics,.login-layout{animation:none}button{transition:none}.subject:hover:not(:disabled){transform:none}}

@@ -18,6 +18,8 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ImageView;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import java.net.HttpURLConnection;
 import java.net.URI;
@@ -44,7 +46,7 @@ public final class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        root.setBackgroundColor(Color.rgb(242,246,242));
+        root.setBackgroundColor(Color.rgb(246,244,252));
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             int top;
             int bottom;
@@ -83,10 +85,13 @@ public final class MainActivity extends Activity {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(24), dp(32), dp(24), dp(24));
         root.addView(card);
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(getResources().getIdentifier("school_logo", "drawable", getPackageName()));
+        card.addView(logo, new LinearLayout.LayoutParams(dp(72), dp(72)));
         TextView title = new TextView(this);
         title.setText("منصة الدفعة");
         title.setTextSize(30);
-        title.setTextColor(Color.rgb(18,62,52));
+        title.setTextColor(Color.rgb(36,21,77));
         card.addView(title);
         TextView instructions = new TextView(this);
         instructions.setText("أدخل رابط تطبيق الطلاب الذي استلمته من المدرسة.");
@@ -146,8 +151,8 @@ public final class MainActivity extends Activity {
         try {
             connection = (HttpURLConnection) new URI(address + "/student-app").toURL().openConnection();
             connection.setInstanceFollowRedirects(false);
-            connection.setConnectTimeout(7000);
-            connection.setReadTimeout(7000);
+            connection.setConnectTimeout(4000);
+            connection.setReadTimeout(4000);
             if (connection.getResponseCode() != 200) return false;
             try (java.io.InputStream stream = connection.getInputStream()) {
                 byte[] payload = new byte[32];
@@ -172,7 +177,27 @@ public final class MainActivity extends Activity {
     private void openStudentApp() {
         LinearLayout root = layout();
         web = new WebView(this);
-        root.addView(web, new LinearLayout.LayoutParams(-1, -1));
+        TextView loading = new TextView(this);
+        loading.setText("جارٍ فتح منصة الدفعة…");
+        loading.setPadding(dp(16), dp(12), dp(16), dp(8));
+        loading.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        root.addView(loading);
+        ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setIndeterminate(true);
+        root.addView(progress);
+        Button connection = new Button(this);
+        connection.setText("إعدادات الاتصال");
+        connection.setOnClickListener(view -> setup(""));
+        root.addView(connection);
+        root.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
+        WebView page = web;
+        Runnable timedOut = () -> {
+            if (web == page && !isDestroyed()) {
+                page.stopLoading();
+                setup("تأخر الخادم في الرد. تحقق من رابط الطلاب ثم أعد المحاولة.");
+            }
+        };
+        page.postDelayed(timedOut, 12000);
         web.getSettings().setJavaScriptEnabled(true);
         web.getSettings().setDomStorageEnabled(true);
         web.getSettings().setAllowFileAccess(false);
@@ -186,8 +211,24 @@ public final class MainActivity extends Activity {
             @Override public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 return !allowed(Uri.parse(url));
             }
+            @Override public void onPageFinished(WebView view, String url) {
+                if (web != page || !allowed(Uri.parse(url))) return;
+                view.removeCallbacks(timedOut);
+                loading.setVisibility(View.GONE);
+                progress.setVisibility(View.GONE);
+                connection.setVisibility(View.GONE);
+            }
+            private void connectionError(WebView view) {
+                view.removeCallbacks(timedOut);
+                view.post(() -> {
+                    if (web == page && !isDestroyed()) setup("تعذّر فتح رابط الطلاب. تحقق من الرابط والإنترنت.");
+                });
+            }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) view.post(() -> setup("تعذّر فتح التطبيق. جرّب الاتصال مجددًا."));
+                if (request.isForMainFrame()) connectionError(view);
+            }
+            @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, android.webkit.WebResourceResponse error) {
+                if (request.isForMainFrame()) connectionError(view);
             }
         });
         web.setWebChromeClient(new WebChromeClient() {

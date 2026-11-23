@@ -18,9 +18,18 @@ export const select = (name, items) => el('select', { name }, items.map(([value,
 export const empty = message => el('p', { class: 'empty' }, message);
 export const date = value => new Intl.DateTimeFormat('ar-SY', { dateStyle: 'medium', timeStyle: 'short' }).format(value);
 export async function api(path, data) {
-  const response = await fetch('/api' + path, data === undefined ? {} : {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
-  });
+  let response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), path === '/accounts' && data ? 35000 : 15000);
+  try {
+    response = await fetch('/api' + path, {
+      signal: controller.signal,
+      ...(data === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+    });
+  } catch {
+    throw Error('تعذّر الاتصال بالخادم. تحقق من الرابط والاتصال ثم حاول مجددًا.');
+  } finally { clearTimeout(timeout); }
+  if (!response.headers.get('Content-Type')?.includes('application/json')) throw Error('عنوان الخادم غير صحيح أو الخدمة غير متاحة.');
   const result = await response.json();
   if (!response.ok) throw Object.assign(Error(result.error), { status: response.status });
   return result;
@@ -40,16 +49,19 @@ export function form(fields, label, submit) {
 }
 export function errorView(error) {
   if (error.status === 401) { location.reload(); return; }
-  app.replaceChildren(heading('تعذّر فتح الصفحة'), empty(error.message));
+  app.replaceChildren(heading('تعذّر فتح الصفحة'), empty(error.message), button('إعادة المحاولة', () => location.reload(), 'primary'));
 }
 export function login(area, ready) {
   nav.replaceChildren();
-  app.replaceChildren(heading(area === 'admin' ? 'دخول الإدارة' : 'أهلًا بك في منصة الدفعة', 'سجّل الدخول بالحساب الذي استلمته.'),
-    form([
+  app.replaceChildren(el('div', { class: 'login-layout' },
+    el('section', { class: 'hero login-hero' }, el('img', { src: '/icon-192.png', alt: '', width: 88, height: 88 }),
+      el('h1', {}, area === 'admin' ? 'لوحة إدارة الدفعة' : 'منصة الدفعة'),
+      el('p', {}, area === 'admin' ? 'أدر المحتوى والحسابات من مكان واحد.' : 'موادك ومستنداتك واختباراتك في مكان واحد.')),
+    form([el('h2', {}, 'تسجيل الدخول'),
       line('اسم المستخدم', input('username', { autocomplete: 'username', required: true, dir: 'ltr' })),
       line('كلمة المرور', input('password', { type: 'password', autocomplete: 'current-password', required: true, dir: 'ltr' })),
       area === 'admin' && line('رمز التحقق للمالك', input('code', { inputmode: 'numeric', autocomplete: 'one-time-code', dir: 'ltr', maxlength: 6 })),
-    ].filter(Boolean), 'دخول', async data => ready(await api('/login', data))));
+    ].filter(Boolean), 'دخول', async data => ready(await api('/login', data)))));
 }
 export function temporary(ready) {
   app.replaceChildren(heading('حدّث كلمة المرور المؤقتة'),

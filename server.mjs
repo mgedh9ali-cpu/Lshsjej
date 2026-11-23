@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { studentIcons } from './web/icons.mjs';
+import { localOcr, duplicateTopic, topicKey } from './lib/ocr.mjs';
 
 const env = process.env;
 const path = env.SCHOOL_DB || 'data/school.sqlite';
@@ -91,8 +91,6 @@ for (const name of ['الفيزياء', 'الكيمياء', 'العلوم', 'ا�
   run('INSERT OR IGNORE INTO subjects(name) VALUES(?)', name);
 }
 run("UPDATE submissions SET state='failed' WHERE state='processing'");
-const topicKey = value => value.normalize('NFKC').toLowerCase().replace(/[\u064b-\u065f\u0640]/g, '')
-  .replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 const subject = id => get('SELECT id,name FROM subjects WHERE id=?', Number(id) || 0) ?? fail(404, 'المادة غير موجودة.');
 const audit = (user, action, details) => run('INSERT INTO audit(user,action,details,created) VALUES(?,?,?,?)', user.id, action, String(details), Date.now());
 const permissions = ['quizzes', 'notices', 'publishNotices'];
@@ -152,7 +150,11 @@ function imageData(value) {
   if (!valid[match[1]]) fail(415, 'بيانات الصورة غير صالحة.');
   return bytes;
 }
+const remoteOcr = () => Boolean(env.SCHOOL_AI_URL && env.SCHOOL_AI_KEY && env.SCHOOL_AI_MODEL);
 async function analyzeImage(image, topics) {
+  const mode = env.SCHOOL_OCR_MODE || (remoteOcr() ? 'remote' : 'local');
+  if (mode === 'local') return localOcr(imageData(image), topics, env.SCHOOL_OCR_LANGUAGES || 'ara+eng');
+  if (mode !== 'remote' || !remoteOcr()) throw Error('OCR provider is not configured');
   const result = await fetch(env.SCHOOL_AI_URL, {
     method: 'POST', signal: AbortSignal.timeout(45000),
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + env.SCHOOL_AI_KEY },
@@ -181,7 +183,7 @@ async function processImage(id, subjectId, image) {
     const key = topicKey(title);
     if (!key) throw Error('Empty topic');
     transaction(() => {
-      const duplicate = topics.find(topic => topic.id === result.duplicateId)
+      const duplicate = duplicateTopic(title, body, topics) || topics.find(topic => topic.id === result.duplicateId)
         || get('SELECT id FROM documents WHERE subject=? AND topic=?', subjectId, key);
       const document = duplicate?.id ?? Number(run('INSERT INTO documents(subject,title,body,topic,updated) VALUES(?,?,?,?,?)', subjectId, title, body, key, Date.now()).lastInsertRowid);
       run('UPDATE submissions SET state=?,document=? WHERE id=?', duplicate ? 'duplicate' : 'published', document, id);
@@ -190,7 +192,8 @@ async function processImage(id, subjectId, image) {
         audit(author, 'نشر مستند تلقائيًا', title);
       }
     });
-  } catch {
+  } catch (error) {
+    console.warn('Image processing failed:', error.message);
     run("UPDATE submissions SET state='failed' WHERE id=?", id);
   }
 }
@@ -254,7 +257,6 @@ async function api(req, res, area, route, params) {
     if (method === 'GET' && route === '/document') return get('SELECT d.*,s.name AS subjectName FROM documents d JOIN subjects s ON s.id=d.subject WHERE d.id=?', Number(params.get('id'))) ?? fail(404, 'المستند غير موجود.');
     if (method === 'GET' && route === '/submissions') return all('SELECT id,state,document FROM submissions WHERE user=? AND subject=? ORDER BY id DESC', user.id, subject(params.get('subject')).id);
     if (method === 'POST' && route === '/submissions') {
-      if (!env.SCHOOL_AI_URL || !env.SCHOOL_AI_KEY || !env.SCHOOL_AI_MODEL) fail(503, 'معالجة الصور تحتاج تفعيلها من إدارة الخادم.');
       limit('image:' + user.id, 8, 600000);
       const data = await json(req, 6_700_000);
       if (get("SELECT count(*) AS total FROM submissions WHERE state='processing'").total >= 12) fail(429, 'المعالجة مشغولة. جرّب بعد قليل.');
@@ -298,6 +300,18 @@ async function api(req, res, area, route, params) {
   if (method === 'GET' && route === '/notices') {
     if (!can(user, 'notices') && !can(user, 'publishNotices')) fail(403, 'هذه الصفحة تحتاج صلاحية الأخبار.');
     return all('SELECT * FROM notices ORDER BY id DESC');
+  }
+  if (method === 'GET' && route === '/overview') {
+    ownerOnly(user);
+    return {
+      students: get("SELECT count(*) AS total FROM users WHERE role='student' AND active=1").total,
+      documents: get('SELECT count(*) AS total FROM documents').total,
+      drafts: get('SELECT count(*) AS total FROM quizzes WHERE published=0').total,
+      processing: get("SELECT count(*) AS total FROM submissions WHERE state='processing'").total,
+      duplicates: get("SELECT count(*) AS total FROM submissions WHERE state='duplicate'").total,
+      needsRetry: get("SELECT count(*) AS total FROM submissions WHERE state IN ('failed','unreadable')").total,
+      engine: env.SCHOOL_OCR_MODE || (remoteOcr() ? 'remote' : 'local'),
+    };
   }
   if (method === 'GET' && route === '/accounts') {
     ownerOnly(user);
@@ -407,6 +421,10 @@ async function api(req, res, area, route, params) {
 }
 
 const staticFiles = {
+  '/icon-192.png': ['icon-192.png', 'image/png'],
+  '/icon-512.png': ['icon-512.png', 'image/png'],
+  '/fonts/cairo-arabic.woff2': ['fonts/cairo-arabic-wght-normal.woff2', 'font/woff2'],
+  '/fonts/cairo-latin.woff2': ['fonts/cairo-latin-wght-normal.woff2', 'font/woff2'],
   '/styles.css': ['styles.css', 'text/css'],
   '/common.js': ['common.js', 'text/javascript'],
 };
@@ -429,6 +447,11 @@ function serve(area, port) {
         res.end(JSON.stringify(data));
         return;
       }
+      if (req.method === 'GET' && url.pathname === '/health') {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ ok: true, area }));
+        return;
+      }
       if (req.method === 'GET' && area === 'student' && url.pathname === '/student-app') {
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.end('school-student-v1');
@@ -444,12 +467,6 @@ function serve(area, port) {
         res.end(bytes);
         return;
       }
-      const icon = area === 'student' && Object.hasOwn(studentIcons, url.pathname) && studentIcons[url.pathname];
-      if (req.method === 'GET' && icon) {
-        res.setHeader('Content-Type', 'image/png');
-        res.end(Buffer.from(icon, 'base64'));
-        return;
-      }
       const entry = {
         ...staticFiles,
         ...(area === 'student' ? {
@@ -460,8 +477,13 @@ function serve(area, port) {
         '/app.js': [area + '.js', 'text/javascript'],
       }[url.pathname];
       if (req.method !== 'GET' || !Array.isArray(entry)) fail(404, 'الصفحة غير موجودة.');
-      res.setHeader('Content-Type', entry[1] + '; charset=utf-8');
-      res.end(readFileSync(new URL('./web/' + entry[0], import.meta.url)));
+      res.setHeader('Content-Type', entry[1].startsWith('font/') || entry[1].startsWith('image/') ? entry[1] : entry[1] + '; charset=utf-8');
+      if (entry[1] === 'font/woff2') res.setHeader('Cache-Control', 'public, max-age=86400');
+      const content = readFileSync(new URL('./web/' + entry[0], import.meta.url));
+      if (entry[0] === 'styles.css' && env.SCHOOL_FONT_DIR) {
+        res.write('@font-face{font-family:Thmanyah;src:url("/fonts/thmanyahsans-Regular.woff2") format("woff2");font-weight:400 500;font-display:swap}@font-face{font-family:Thmanyah;src:url("/fonts/thmanyahsans-Bold.woff2") format("woff2");font-weight:600 900;font-display:swap}');
+      }
+      res.end(content);
     } catch (error) {
       if (!error.status) console.error(error);
       res.statusCode = error.status || 500;

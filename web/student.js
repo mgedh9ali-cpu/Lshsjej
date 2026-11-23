@@ -1,7 +1,6 @@
 import { app, nav, el, button, heading, line, api, form, login, temporary, logout, empty, errorView, date } from './common.js';
 
 let page = 0;
-let notices = [];
 const display = fn => async () => {
   const current = ++page;
   try {
@@ -17,7 +16,7 @@ function noticeList(items) {
 }
 const home = display(async () => {
   const subjects = await api('/subjects');
-  return [heading('المواد الدراسية', 'اختر مادة لتفتح المستندات والاختبارات.'), el('div', { class: 'grid' }, subjects.map((item, index) =>
+  return [heading('المواد الدراسية', 'اختر مادة لتفتح مستنداتها واختباراتها.'), el('div', { class: 'grid' }, subjects.map((item, index) =>
     button([el('span', { class: 'subject-icon', 'aria-hidden': 'true' }, ['⚡', '◇', '✿', 'Aa', '∑'][index % 5]), item.name], subjectPage(item), 'card subject')))];
 });
 const news = display(async () => [heading('الأخبار والتذكيرات'), noticeList(await api('/notices'))]);
@@ -30,8 +29,7 @@ const statusLabel = { processing: 'قيد المعالجة', published: 'نُش�
 function subjectPage(subject, tab = 'documents') {
   return display(async current => {
     const query = '?subject=' + subject.id;
-    const items = await api('/' + tab + query);
-    notices = await api('/notices');
+    const [items, notices] = await Promise.all([api('/' + tab + query), api('/notices')]);
     const controls = el('div', { class: 'actions', role: 'group', 'aria-label': 'أقسام المادة' },
       button('المستندات', subjectPage(subject), 'secondary', { 'aria-pressed': String(tab === 'documents') }),
       button('الاختبارات', subjectPage(subject, 'quizzes'), 'secondary', { 'aria-pressed': String(tab === 'quizzes') }));
@@ -46,17 +44,17 @@ function subjectPage(subject, tab = 'documents') {
       };
       render();
       content.push(line('البحث بعنوان المستند', el('input', { type: 'search', oninput: event => render(event.target.value) })), list);
-      const submissionList = el('div', { class: 'stack' });
+      const submissionList = el('div', { class: 'stack', 'aria-live': 'polite' });
       async function refresh() {
         const submissions = await api('/submissions' + query);
         if (page !== current) return;
         submissionList.replaceChildren(...submissions.map(item => el('div', { class: 'row' },
-          statusLabel[item.state], item.document && button('فتح المستند', documentPage(subject, item.document)))));
+          el('span', {}, statusLabel[item.state]), item.document && button('فتح المستند', documentPage(subject, item.document)))));
         if (submissions.some(item => item.state === 'processing')) setTimeout(() => {
           if (page === current) refresh().catch(error => { submissionList.textContent = error.message; });
         }, 2500);
       }
-      await refresh();
+      refresh().catch(error => { submissionList.textContent = error.message; });
       const picker = el('input', { name: 'file', type: 'file', accept: 'image/jpeg,image/png,image/webp', required: true });
       content.push(el('h2', {}, 'مساهماتي'), form([line('اختر صورة من جهازك · حتى 5 ميغابايت', picker)], 'رفع المساهمة', async (data, message, formElement) => {
         if (data.file.size > 5_000_000) throw Error('الحد الأقصى للصورة 5 ميغابايت.');

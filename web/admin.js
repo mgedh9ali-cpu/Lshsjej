@@ -145,11 +145,21 @@ const auditPage = show(async () => {
   ...(!items.length ? [empty('ما في تغييرات مسجلة بعد.')] : [])];
 });
 const dashboard = show(async () => {
-  const drafts = can('quizzes') ? (await api('/quizzes')).filter(item => !item.published).length : 0;
-  return [heading('لوحة الإدارة', 'أهلًا، ' + me.name), el('div', { class: 'grid' },
-    owner() && button('إضافة طالب', accountPage, 'card subject'),
-    (can('notices') || can('publishNotices')) && button('الأخبار والتذكيرات', noticesPage, 'card subject'),
-    can('quizzes') && button('الاختبارات بانتظار الاعتماد · ' + drafts, quizzesPage, 'card subject'))];
+  const overview = owner() ? await api('/overview') : null;
+  const drafts = overview?.drafts ?? (can('quizzes') ? (await api('/quizzes')).filter(item => !item.published).length : 0);
+  const metric = (label, value) => card(el('strong', { class: 'metric-value' }, String(value)), el('p', {}, label));
+  return [heading('لوحة الإدارة', 'أهلًا، ' + me.name),
+    overview && el('div', { class: 'metrics' },
+      metric('طلاب فعّالون', overview.students), metric('مستندات منشورة', overview.documents), metric('اختبارات بانتظار الاعتماد', drafts)),
+    el('div', { class: 'grid shortcuts' },
+      owner() && button('إضافة طالب', accountPage, 'card subject'),
+      (can('notices') || can('publishNotices')) && button('الأخبار والتذكيرات', noticesPage, 'card subject'),
+      can('quizzes') && button('مراجعة الاختبارات', quizzesPage, 'card subject')),
+    overview && el('section', { class: 'card processing-panel' },
+      el('h2', {}, 'معالجة المساهمات'),
+      el('p', {}, overview.engine === 'local' ? 'قارئ الصور المحلي' : 'معالجة عبر مزوّد خارجي'),
+      el('div', { class: 'metrics' }, metric('قيد المعالجة', overview.processing), metric('موضوعات مكررة', overview.duplicates), metric('تحتاج إعادة رفع', overview.needsRetry))),
+  ].filter(Boolean);
 });
 function ready(user) {
   me = user;

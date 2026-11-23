@@ -5,3 +5,5 @@
 !web/**
 !scripts/
 !scripts/backup.mjs
+!lib/
+!lib/**
