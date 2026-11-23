@@ -4,6 +4,7 @@ import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 
 const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
@@ -16,8 +17,8 @@ test('ships separate student and owner launchers without the hosted web app', ()
     const source = read('android/' + manifest);
     assert.ok(source.includes('package="' + id + '"'));
     assert.ok(source.includes('android:name="' + activity + '"'));
-    assert.match(source, /android:versionCode="14"/);
-    assert.match(source, /android:versionName="0\.7\.1"/);
+    assert.match(source, /android:versionCode="15"/);
+    assert.match(source, /android:versionName="0\.7\.2"/);
     assert.match(source, /android:usesCleartextTraffic="false"/);
     assert.doesNotMatch(source, /android.intent.category.BROWSABLE/);
   }
@@ -36,6 +37,46 @@ test('student registration is local and only the registration notice is sent to 
   const registration = read('android/src/school/dafaa/LocalRegistration.java');
   assert.match(registration, /RoomStore\.obj\("op", "registerLocal", "id", id, "name", name\)/);
   assert.doesNotMatch(registration, /password|verifier|salt/);
+});
+
+test('the bottom bar opens role-specific pages and keeps Materials selected inside a lesson', () => {
+  const html = read('android/room/room.html');
+  assert.match(html, /<nav id="bottom-nav"/);
+  assert.doesNotMatch(html, /id="drawer"|id="menu"/);
+  const script = read('android/room/room.js');
+  const start = script.indexOf('const links=');
+  const end = script.indexOf('async function boot()', start);
+  const element = () => ({
+    children: [],
+    attrs: {},
+    dataset: {},
+    get childElementCount() { return this.children.length; },
+    append(...items) { this.children.push(...items); },
+    replaceChildren(...items) { this.children = items; },
+    setAttribute(key, value) { this.attrs[key] = value; },
+    removeAttribute(key) { delete this.attrs[key]; },
+    addEventListener() {},
+  });
+  for (const owner of [false, true]) {
+    const nav = element();
+    const activity = [];
+    const globals = {
+      owner, name: 'حساب تجريبي', locked: false, page: 'source', bottomNav: nav,
+      document: { body: element(), documentElement: { classList: { toggle() {} } }, createElementNS: element },
+      $: element, el: element,
+      button: (_label, click) => Object.assign(element(), { click }),
+      go: page => activity.push(page),
+    };
+    runInNewContext(script.slice(start, end) + '\nnavigation();', globals);
+    assert.deepEqual(Array.from(nav.children, item => item.dataset.page),
+      owner ? ['home', 'feed', 'feedback', 'accounts', 'settings'] : ['home', 'settings']);
+    assert.equal(nav.children[0].attrs['aria-current'], 'page');
+    nav.children.at(-1).click();
+    assert.deepEqual(activity, ['settings']);
+    globals.name = '';
+    runInNewContext('navigation();', globals);
+    assert.equal(nav.hidden, true);
+  }
 });
 
 test('the packaged offline catalog contains valid Arabic subject data', () => {

@@ -1,6 +1,6 @@
 'use strict';
 const $=sel=>document.querySelector(sel);
-const main=$('main'), drawer=$('#drawer'), appBar=$('.app-bar'), menu=$('#menu'), shade=$('#shade'), pending=new Map();
+const main=$('main'), bottomNav=$('#bottom-nav'), pending=new Map();
 let serial=0,revision=0,page='login',name='',owner=false,setup=false,cache,selected,hideTimer;
 let offline=false,hasAccount=false,locked=false,previewUrl=null,registrationSent=false;
 function rpc(op,data={}){
@@ -43,35 +43,56 @@ function form(title,fields,label,fn){
   return f;
 }
 const links=()=>[['home',owner?'لوحة الصف':'المواد'],...(owner?[['feed','الإشعارات'],['feedback','الاقتراحات'],['accounts','الطلاب']]:[]),['settings','الإعدادات']];
+// Icon geometry from Lucide (ISC), https://lucide.dev/license.
+const navIconPaths={
+  home:['m3 10 9-7 9 7v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z','M9 21v-6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v6'],
+  feed:['M10 20a2 2 0 0 0 4 0','M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'],
+  feedback:['M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z'],
+  accounts:['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2','M22 21v-2a4 4 0 0 0-3-3.87','M16 3.13a4 4 0 0 1 0 7.75','M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0'],
+  settings:['M4 7h16M4 17h16','M10 4v6M15 14v6'],
+};
+function navIcon(key){
+  const namespace='http://www.w3.org/2000/svg';
+  const icon=document.createElementNS(namespace,'svg');
+  for(const [attribute,value] of Object.entries({viewBox:'0 0 24 24','aria-hidden':'true',fill:'none',stroke:'currentColor','stroke-width':'1.8','stroke-linecap':'round','stroke-linejoin':'round'}))
+    icon.setAttribute(attribute,value);
+  for(const value of navIconPaths[key]){
+    const path=document.createElementNS(namespace,'path');
+    path.setAttribute('d',value);icon.append(path);
+  }
+  return icon;
+}
 function navigation(){
-  menu.hidden=!name||(!owner&&locked);
+  const show=Boolean(name)&&(owner||!locked);
+  bottomNav.hidden=!show;
+  document.documentElement.classList.toggle('has-bottom-nav',show);
   document.body.dataset.role=owner?'owner':'student';
   $('#role').textContent=owner?'المالك':'الطالب';
-  const tabs=!menu.hidden?links():[];
-  drawer.querySelector('nav').replaceChildren(...tabs.map(([key,label])=>{
-    const entry=button(label,()=>go(key,undefined,true),page===key?'current':'');
-    if(page===key)entry.setAttribute('aria-current','page');
-    return entry;
-  }));
+  if(!show){bottomNav.replaceChildren();return;}
+  if(!bottomNav.childElementCount){
+    bottomNav.replaceChildren(...links().map(([key,label])=>{
+      const entry=button('',()=>go(key,undefined,true),'bottom-tab');
+      entry.dataset.page=key;
+      entry.setAttribute('aria-label',label);
+      entry.append(navIcon(key),el('span',label,'bottom-tab-label'));
+      return entry;
+    }));
+  }
+  const active=['subject','source','quiz'].includes(page)?'home':page;
+  for(const entry of bottomNav.children){
+    if(entry.dataset.page===active)entry.setAttribute('aria-current','page');
+    else entry.removeAttribute('aria-current');
+  }
 }
-function showDrawer(open,restoreFocus=false){
-  drawer.hidden=shade.hidden=!open;
-  document.body.classList.toggle('drawer-open',open);
-  appBar.inert=main.inert=open;
-  menu.setAttribute('aria-expanded',String(open));
-  if(open)$('#close').focus();
-  else if(restoreFocus)menu.focus();
-}
-menu.onclick=()=>showDrawer(true);
-$('#close').onclick=shade.onclick=()=>showDrawer(false,true);
-document.addEventListener('keydown',e=>{
-  if(drawer.hidden)return;
-  if(e.key==='Escape'){e.preventDefault();showDrawer(false,true);return;}
-  if(e.key!=='Tab')return;
-  const items=drawer.querySelectorAll('button:not(:disabled)');
-  const first=items[0],last=items[items.length-1];
-  if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
-  else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+bottomNav.addEventListener('keydown',event=>{
+  if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+  const options=Array.from(bottomNav.children);
+  const index=options.indexOf(document.activeElement);
+  if(index<0)return;
+  event.preventDefault();
+  const offset=event.key==='ArrowLeft'?1:-1;
+  const next=event.key==='Home'?0:event.key==='End'?options.length-1:(index+offset+options.length)%options.length;
+  options[next].focus();
 });
 async function boot(){
   const state=await rpc('boot');
@@ -85,7 +106,7 @@ async function boot(){
 }
 async function go(next,item,focusPage=false){
   if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
-  showDrawer(false);page=next;const mine=++revision;
+  page=next;const mine=++revision;
   if(item&&next==='subject')selected=item;
   navigation();
   const pages={unlock,login,home,feed,feedback,accounts,settings,subject,source,quiz};
@@ -239,5 +260,5 @@ async function source(item){const record=await rpc('source',{id:item.id});const 
   return [button('العودة للمادة',()=>go('subject',selected)),hero(record.title,date(record.created)+(owner&&record.added_by?' · أضافه '+record.added_by:'')),wrap('card',el('pre',record.body),img),owner&&button('حذف المصدر',async()=>{if(confirm('حذف هذا المصدر من الصف؟')){await rpc('remove',{id:item.id});await go('subject',selected);}})];}
 async function quiz(item){const q=await rpc('quiz',{id:item.id}),choices=JSON.parse(q.choices),result=el('p');
   return [hero(q.title,selected.name),wrap('card',el('h3',q.question),...choices.map((v,i)=>button(v,async()=>{if(owner){message('معاينة المالك');return;}const score=await rpc('solve',{id:item.id,choice:i});result.textContent=i===score.answer?'إجابة صحيحة':'الإجابة الصحيحة · '+choices[score.answer];})),result),button('العودة للمادة',()=>go('subject',selected))];}
-window.backPage=()=>{if(!drawer.hidden){showDrawer(false,true);return true;}if(page==='source'||page==='quiz'){go('subject',selected);return true;}if(!owner&&locked)return false;if((name||offline)&&page!=='home'){go('home');return true;}return false;};
+window.backPage=()=>{if(page==='source'||page==='quiz'){go('subject',selected);return true;}if(!owner&&locked)return false;if((name||offline)&&page!=='home'){go('home');return true;}return false;};
 boot().catch(e=>message(e.message));

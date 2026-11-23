@@ -113,25 +113,6 @@ button:disabled { opacity: .55; cursor: default; }
 }
 #role:empty { display: none; }
 body[data-role="owner"] #role { background: var(--gold-soft); color: var(--gold-ink); }
-.icon-button {
-  box-sizing: border-box;
-  flex: 0 0 46px;
-  width: 46px;
-  height: 46px;
-  padding: 0;
-  background: var(--bg);
-}
-.menu-icon, .menu-icon::before, .menu-icon::after {
-  display: block;
-  width: 17px;
-  height: 2px;
-  border-radius: 2px;
-  background: currentColor;
-}
-.menu-icon { position: relative; }
-.menu-icon::before, .menu-icon::after { content: ""; position: absolute; inset-inline: 0; }
-.menu-icon::before { top: -5px; }
-.menu-icon::after { top: 5px; }
 main {
   width: min(100%, 760px);
   margin-inline: auto;
@@ -279,35 +260,60 @@ img { display: block; max-width: 100%; height: auto; border-radius: 12px; }
 }
 .legacy-sources summary { min-height: 46px; padding-block: 10px; cursor: pointer; font-weight: 700; }
 .legacy-sources img { max-height: 24rem; margin: 8px auto 0; }
-#shade {
+/* Android supplies the system-bar and keyboard insets to the WebView. */
+html.has-bottom-nav { scroll-padding-bottom: 82px; }
+.has-bottom-nav main { padding-bottom: 92px; }
+.bottom-nav {
   position: fixed;
-  inset: 0;
+  inset-inline: 0;
+  bottom: 8px;
   z-index: 3;
-  background: #101d307d;
-  animation: shade-in var(--motion) both;
-}
-body.drawer-open { overflow: hidden; }
-#drawer {
-  position: fixed;
-  inset-block: 0;
-  inset-inline-start: 0;
-  z-index: 4;
   display: flex;
-  flex-direction: column;
-  width: min(320px, calc(100% - 34px));
-  padding: 12px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  align-items: center;
+  justify-content: safe center;
+  gap: 3px;
+  width: max-content;
+  max-width: calc(100% - 12px);
+  margin-inline: auto;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 32px;
   background: var(--surface);
-  border-inline-end: 1px solid var(--line);
-  box-shadow: -12px 0 28px #101d3033;
-  animation: drawer-in 200ms cubic-bezier(.2, .75, .25, 1) both;
+  box-shadow: 0 5px 22px #14273d35;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.drawer-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 2px 12px; }
-.drawer-heading #close { font-family: system-ui, sans-serif; font-size: 1.6rem; line-height: 1; }
-#drawer nav { display: grid; gap: 6px; }
-#drawer nav button { justify-content: flex-start; text-align: start; }
-#drawer nav .current { background: var(--mint-soft); border-color: #a0d6c7; color: var(--mint-ink); font-weight: 700; }
+.bottom-nav::-webkit-scrollbar { display: none; }
+.bottom-tab {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 46px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 24px;
+  color: var(--muted);
+  background: transparent;
+}
+.bottom-tab:focus-visible { outline-offset: -2px; }
+.bottom-tab svg { flex: 0 0 auto; width: 21px; height: 21px; }
+.bottom-tab-label {
+  display: block;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0;
+  font-size: .81rem;
+  font-weight: 700;
+  transition: max-width var(--motion), margin-inline-start var(--motion), opacity var(--motion);
+}
+.bottom-tab[aria-current="page"] { color: var(--mint-ink); background: var(--mint-soft); }
+.bottom-tab[aria-current="page"] .bottom-tab-label { max-width: 92px; margin-inline-start: 5px; opacity: 1; }
+.has-bottom-nav #message { bottom: 78px; }
+@media (max-width: 350px) {
+  .bottom-nav { gap: 2px; }
+  .bottom-tab[aria-current="page"] .bottom-tab-label { max-width: 70px; }
+}
 #message {
   position: fixed;
   inset-inline: 12px;
@@ -324,8 +330,6 @@ body.drawer-open { overflow: hidden; }
 }
 main > .hero { animation: page-in var(--motion) both; }
 @keyframes page-in { from { opacity: .7; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes drawer-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
-@keyframes shade-in { from { opacity: 0; } to { opacity: 1; } }
 @media (min-width: 650px) {
   .grid:not(.stat-grid) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
@@ -349,5 +353,6 @@ main > .hero { animation: page-in var(--motion) both; }
 @media (prefers-reduced-motion: reduce) {
   button { transition: none; }
   button:active:not(:disabled), .tile:not(:disabled):hover { transform: none; }
-  #drawer, #shade, main > .hero { animation: none; }
+  main > .hero { animation: none; }
+  .bottom-tab-label { transition: none; }
 }
