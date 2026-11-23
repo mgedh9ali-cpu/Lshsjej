@@ -20,6 +20,13 @@ mkdir -p "$temp/classes" "$temp/dex" "$temp/assets" "$(dirname "$output")"
 printf '%s\n' "${STUDENT_ORIGIN:-}" > "$temp/assets/student-origin.txt"
 cp "$root"/android/offline/* "$root"/android/room/* "$temp/assets/"
 cp "$root/web/fonts/cairo-arabic-wght-normal.woff2" "$temp/assets/cairo.woff2"
+font_dir="${SCHOOL_FONT_DIR:-$root/android/fonts}"
+if [[ -f "$font_dir/thmanyahsans-Regular.woff2" && -f "$font_dir/thmanyahsans-Bold.woff2" ]]; then
+  cp "$font_dir/thmanyahsans-Regular.woff2" "$temp/assets/thmanyahsans-Regular.woff2"
+  cp "$font_dir/thmanyahsans-Bold.woff2" "$temp/assets/thmanyahsans-Bold.woff2"
+else
+  printf '%s\n' 'Thmanyah font assets not found: using Cairo fallback until both licensed WOFF2 files are supplied.' >&2
+fi
 cp "$root/web/fonts/Cairo-OFL.txt" "$temp/assets/Cairo-OFL.txt"
 node "$root/scripts/prepare-ocr.mjs" "$temp/assets"
 node "$root/scripts/build-student-db.mjs" "$temp/assets/student.sqlite"

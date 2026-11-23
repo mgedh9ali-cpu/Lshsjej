@@ -25,6 +25,7 @@ public final class RoomActivity extends Activity {
     private String restorePassword;
     @Override public void onCreate(Bundle saved){
         super.onCreate(saved);
+        if(android.os.Build.VERSION.SDK_INT>=30)getWindow().setDecorFitsSystemWindows(false);
         owner="school.dafaa.owner".equals(getPackageName());
         base=owner?"https://room.invalid/":"https://classroom.invalid/";
         if(owner){store=new RoomStore(this);link=new RoomLink(store);}
@@ -48,7 +49,7 @@ public final class RoomActivity extends Activity {
             @Override public boolean shouldOverrideUrlLoading(WebView v,String url){return true;}
             @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){
                 Uri u=r.getUrl();String file=u.getLastPathSegment();
-                if(r.getUrl().toString().startsWith(base)&&Arrays.asList("library.js","room.html","room.css","room.js","ocr-worker.js","core.js","models.js","cairo.woff2").contains(file)){
+                if(r.getUrl().toString().startsWith(base)&&Arrays.asList("library.js","room.html","room.css","room.js","ocr-worker.js","core.js","models.js","cairo.woff2","thmanyahsans-Regular.woff2","thmanyahsans-Bold.woff2").contains(file)){
                     try{return new WebResourceResponse(file.endsWith(".html")?"text/html":file.endsWith(".css")?"text/css":file.endsWith(".woff2")?"font/woff2":"application/javascript",file.endsWith(".woff2")?null:"UTF-8",getAssets().open(file));}catch(Exception ignored){}
                 }
                 return new WebResourceResponse("text/plain","UTF-8",new java.io.ByteArrayInputStream(new byte[0]));

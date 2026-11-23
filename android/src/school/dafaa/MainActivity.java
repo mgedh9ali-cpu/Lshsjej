@@ -79,10 +79,11 @@ public final class MainActivity extends Activity {
             if(localData().getBoolean("remembered",false)&&localData().contains("hash")&&!savedName.isEmpty())
                 showLocalNotes(savedName,0);
             else setup("");
-        }else if(origin.isEmpty()){
+        }else{
+            // The local student dashboard uses one WebView-based navigation flow.
             openClassroom();
             finish();
-        }else openStudentApp();
+        }
     }
 
     private void openClassroom() { startActivity(new Intent(this,RoomActivity.class)); }
@@ -239,7 +240,6 @@ public final class MainActivity extends Activity {
             });
             return;
         }
-        section(card, "دخول الصف برمز المالك", v -> openClassroom());
         add(card, text(first ? "إنشاء حساب محلي" : "تسجيل الدخول", 22, INK, true), 0);
         EditText name = field(card, "الاسم", InputType.TYPE_TEXT_VARIATION_PERSON_NAME);
         EditText secret = field(card, "كلمة السر", InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -323,7 +323,7 @@ public final class MainActivity extends Activity {
         atHome = false;
         LinearLayout screen = panel();
         banner(screen, title, "قوم دروس");
-        section(screen, "العودة للرئيسية", view -> showLocalHome(name));
+        section(screen, "العودة للرئيسية", view -> finish());
         return screen;
     }
 
