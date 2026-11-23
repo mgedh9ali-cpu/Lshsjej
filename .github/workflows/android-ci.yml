@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: android-build-${{ github.ref }}
@@ -71,12 +71,13 @@ jobs:
           bash android/build.sh dist/QumDorous-Student.apk student
       - name: Build Android owner application
         run: bash android/build.sh dist/QumDorous-Owner.apk owner
-      - name: Publish both APKs
-        uses: actions/upload-artifact@v4
-        with:
-          name: QumDorous-Android-${{ env.SCHOOL_SIGN_MODE }}
-          path: |
-            dist/QumDorous-Student.apk
-            dist/QumDorous-Owner.apk
-          retention-days: 30
-          if-no-files-found: error
+      - name: Publish both APKs as a private pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="android-preview-${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" dist/QumDorous-Student.apk dist/QumDorous-Owner.apk \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "قوم دروس · معاينة أندرويد 0.6.2" \
+            --notes "معاينة للتحقق على الأجهزة. حالة التوقيع: ${SCHOOL_SIGN_MODE}. إذا كان التوقيع تجريبيًا، قد يلزم إزالة النسخة السابقة قبل التثبيت؛ صدّر نسخة احتياطية قبل أي تغيير. التطبيق يعمل مع لوحة المالك على الشبكة المحلية."
+          echo "Created release $tag"
