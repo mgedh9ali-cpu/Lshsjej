@@ -75,7 +75,10 @@ public final class MainActivity extends Activity {
             } catch (Exception ignored) {}
         }
         if(getIntent().getBooleanExtra("savedNotes",false)){
-            setup("");
+            String savedName=localData().getString("name","");
+            if(localData().getBoolean("remembered",false)&&localData().contains("hash")&&!savedName.isEmpty())
+                showLocalNotes(savedName,0);
+            else setup("");
         }else if(origin.isEmpty()){
             openClassroom();
             finish();
@@ -266,6 +269,7 @@ public final class MainActivity extends Activity {
                 final boolean success = entered;
                 runOnUiThread(() -> {
                     if (isDestroyed() || isFinishing()) return;
+                    if(success)localData().edit().putBoolean("remembered",true).apply();
                     if (success && getIntent().getBooleanExtra("savedNotes",false)) showLocalNotes(enteredName,0);
                     else if (success) showLocalHome(enteredName);
                     else {
@@ -376,7 +380,7 @@ public final class MainActivity extends Activity {
         section(options,"ملاحظاتي المحفوظة",w -> showLocalNotes(name,0));
         section(options,"الصف على شبكة الواي فاي",w -> openClassroom());
         section(options,"ربط بعنوان المدرسة",w -> configureClass(options));
-        section(options,"تسجيل الخروج",w -> setup(""));
+        section(options,"تسجيل الخروج",w -> {localData().edit().putBoolean("remembered",false).apply();setup("");});
     }
 
     private void connect(String address) {
