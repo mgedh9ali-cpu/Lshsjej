@@ -26,7 +26,7 @@ public final class RoomActivity extends Activity {
         owner="school.dafaa.owner".equals(getPackageName());
         base=owner?"https://room.invalid/":"https://classroom.invalid/";
         if(owner){store=new RoomStore(this);link=new RoomLink(store);}
-        if(!owner)token=getPreferences(MODE_PRIVATE).getString("studentToken","");
+        token=getPreferences(MODE_PRIVATE).getString(owner?"ownerToken":"studentToken","");
         remote=getPreferences(MODE_PRIVATE).getString("invite","");
         web=new WebView(this);web.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         android.widget.FrameLayout frame=new android.widget.FrameLayout(this);
@@ -65,7 +65,7 @@ public final class RoomActivity extends Activity {
                 try{
                     JSONObject p=new JSONObject(raw);String op=p.getString("op");
                     Object value;
-                    if(op.equals("boot"))value=RoomStore.obj("owner",owner,"studentName",owner||token.isEmpty()?"":getPreferences(MODE_PRIVATE).getString("studentName",""),"locked",!unlocked&&getSharedPreferences("offline_student",MODE_PRIVATE).contains("hash"),"paired",!remote.isEmpty(),"setup",owner&&((JSONObject)store.handle(true,"device",RoomStore.obj("op","status"))).optBoolean("setup"));
+                    if(op.equals("boot"))value=RoomStore.obj("owner",owner,"studentName",token.isEmpty()?"":getPreferences(MODE_PRIVATE).getString(owner?"ownerName":"studentName",""),"locked",!unlocked&&getSharedPreferences("offline_student",MODE_PRIVATE).contains("hash"),"paired",!remote.isEmpty(),"setup",owner&&((JSONObject)store.handle(true,"device",RoomStore.obj("op","status"))).optBoolean("setup"));
                     else if(!owner&&op.equals("lock")){unlocked=false;value=RoomStore.obj();}
                     else if(!owner&&op.equals("unlock")){
                         android.content.SharedPreferences old=getSharedPreferences("offline_student",MODE_PRIVATE);
@@ -95,15 +95,21 @@ public final class RoomActivity extends Activity {
                         else{JSONObject response=RoomLink.call(remote,p);if(response.has("error")){String error=response.getString("error");if(error.contains("انتهت الجلسة")){token="";getPreferences(MODE_PRIVATE).edit().remove("studentToken").remove("studentName").apply();}throw new Exception(error);}value=response.get("value");}
                         if(op.equals("login")||op.equals("setup")){
                             token=((JSONObject)value).getString("token");
-                            if(!owner)getPreferences(MODE_PRIVATE).edit().putString("studentToken",token).putString("studentName",((JSONObject)value).getString("name")).apply();((JSONObject)value).remove("token");
+                            getPreferences(MODE_PRIVATE).edit().putString(owner?"ownerToken":"studentToken",token).putString(owner?"ownerName":"studentName",((JSONObject)value).getString("name")).apply();((JSONObject)value).remove("token");
                         }else if(op.equals("logout")){
                             token="";
-                            if(!owner)getPreferences(MODE_PRIVATE).edit().remove("studentToken").remove("studentName").apply();
+                            getPreferences(MODE_PRIVATE).edit().remove(owner?"ownerToken":"studentToken").remove(owner?"ownerName":"studentName").apply();
                             if(owner&&sharing){link.close();link=new RoomLink(store);sharing=false;runOnUiThread(()->getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));}
                         }
                     }
                     result=RoomStore.obj("value",value);
-                }catch(Exception e){try{result=RoomStore.obj("error",RoomLink.safe(e));}catch(Exception impossible){return;}}
+                }catch(Exception e){
+                    if(e.getMessage()!=null&&e.getMessage().contains("انتهت الجلسة")){
+                        token="";
+                        getPreferences(MODE_PRIVATE).edit().remove(owner?"ownerToken":"studentToken").remove(owner?"ownerName":"studentName").apply();
+                    }
+                    try{result=RoomStore.obj("error",RoomLink.safe(e));}catch(Exception impossible){return;}
+                }
                 final String js="window.complete("+id+","+JSONObject.quote(result.toString())+")";
                 runOnUiThread(()->{if(!isDestroyed())web.evaluateJavascript(js,null);});
             });
