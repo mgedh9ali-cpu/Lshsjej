@@ -69,15 +69,15 @@ jobs:
       - name: Build Android owner application
         run: bash android/build.sh dist/QumDorous-Owner.apk owner
       - name: Verify Android packages
-        env:
-          BUILD_TOOLS: ${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0
         run: |
+          build_tools="$ANDROID_SDK_ROOT/build-tools/35.0.0"
           for edition in Student Owner; do
             apk="dist/QumDorous-$edition.apk"
-            "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$apk"
+            "$build_tools/apksigner" verify --verbose --print-certs "$apk"
             package=school.dafaa
             [[ "$edition" != Owner ]] || package=school.dafaa.owner
-            "$BUILD_TOOLS/aapt2" dump badging "$apk" | grep -F "package: name='$package' versionCode='13' versionName='0.7.0'"
+            "$build_tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/apk-badging.txt"
+            grep -F "package: name='$package' versionCode='13' versionName='0.7.0'" "$RUNNER_TEMP/apk-badging.txt"
             unzip -Z1 "$apk" > "$RUNNER_TEMP/apk-files.txt"
             for asset in room.html room.js room.css core.js models.js student.sqlite cairo.woff2; do
               grep -Fx "assets/$asset" "$RUNNER_TEMP/apk-files.txt"
