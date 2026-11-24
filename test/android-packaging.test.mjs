@@ -102,6 +102,6 @@ test('the student inbox keeps received notices visible offline', async () => {
 });
 
 test('source images are published without text extraction', () => {
-  assert.match(read('android/room/room.js'), /rpc\('addSource',\{subject:subject.id,title,image\}\)/);
+  assert.match(read('android/room/room.js'), /rpc\('sharedPublish',\{subject:subject.name,title,\.\.\.attachment,requestId\}\)/);
   assert.doesNotMatch(read('android/build.sh'), /prepare-ocr|offline\/\*/);
 });

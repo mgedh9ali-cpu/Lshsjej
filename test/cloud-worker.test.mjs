@@ -74,15 +74,38 @@ test('the Worker accepts the existing Android requests and isolates student repl
   for (const [device,name] of [[publishingDevice,'طالبة'],[peer,'طالب آخر'],[anotherPeer,'طالب جديد']]) {
     const auth = 'Device ' + device;
     const listing = await send(auth, {device,name,op:'sources',subject:'الفيزياء'});
-    assert.deepEqual(listing.entries, sources);
+    assert.equal(listing.entries[0].id,sources[0].id);
+    assert.equal(Boolean(listing.entries[0].mine), device===publishingDevice);
     const photo = await send(auth, {device,name,op:'source',id:sources[0].id});
     assert.equal(photo.entry.image, publication.image);
     const chemistry = await send(auth, {device,name,op:'sources',subject:'الكيمياء'});
     assert.deepEqual(chemistry.entries, []);
   }
-  await send('Device ' + peer, {...peerData,op:'removesource',id:sources[0].id}, 400);
+  await send('Device ' + peer, {...peerData,op:'removesource',id:sources[0].id}, 403);
   await send('OwnerDevice ' + ownerDevice, {op:'removesource',id:sources[0].id});
   await send('Device ' + peer, {...peerData,op:'source',id:sources[0].id}, 404);
+  const registeredOwner='OwnerDevice '+ownerDevice;
+  await send(registeredOwner,{op:'addsubject',name:'اللغة العربية'});
+  assert.deepEqual((await send('Device '+peer,{...peerData,op:'subjects'})).subjects.map(s=>s.name),['اللغة العربية']);
+  const studentAuth='Device '+publishingDevice;
+  await send(studentAuth,{...publication,requestId:secret(),image:undefined,file:{name:'درس.txt',base64:'aGk='}});
+  const files=(await send('Device '+peer,{...peerData,op:'sources',subject:'الفيزياء',files:true})).entries;
+  const attached=files.find(entry=>entry.attachment);
+  assert.ok(attached);
+  assert.equal((await send('Device '+peer,{...peerData,op:'source',id:attached.id})).entry.file.name,'درس.txt');
+  assert.ok((await send('Device '+peer,{...peerData,op:'sync'})).notices.some(n=>n.title==='طالبة نشر مصدرًا في الفيزياء'));
+  await send(studentAuth,{...publication,op:'removesource',id:attached.id});
+  await send('Device '+peer,{...peerData,op:'source',id:attached.id},404);
+  for(const lesson of [
+    {kind:'summary',title:'ملخص',body:'نص الملخص'},
+    {kind:'link',title:'رابط اختبار',body:'https://example.org/quiz'},
+    {kind:'quiz',title:'اختبار',question:'كم؟',choices:['١','٢'],answer:1}
+  ])await send(registeredOwner,{...lesson,op:'addlesson',subject:'الفيزياء'});
+  await send(registeredOwner,{op:'addlesson',kind:'link',subject:'الفيزياء',title:'رابط',body:'javascript:invalid'},400);
+  const study=await send('Device '+peer,{...peerData,op:'study',subject:'الفيزياء'});
+  assert.equal(study.entries.length,3);
+  assert.equal(study.entries[0].answer,undefined);
+  assert.equal((await send('Device '+peer,{...peerData,op:'solve',id:study.entries[0].id,choice:1})).correct,true);
   const oversize = await worker.fetch(request(env.QUM_OWNER_KEY, { op: 'publish', body: 'x'.repeat(33000) }), env);
   assert.equal(oversize.status, 413);
 });

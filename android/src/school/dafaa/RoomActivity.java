@@ -24,6 +24,7 @@ public final class RoomActivity extends Activity {
     private volatile boolean foreground;
     private volatile boolean noticesConnected;
     private String backupPassword;
+    private byte[] pendingSourceDownload;
     private String restorePassword;
     @Override public void onCreate(Bundle saved){
         super.onCreate(saved);
@@ -61,7 +62,7 @@ public final class RoomActivity extends Activity {
         web.setWebChromeClient(new WebChromeClient(){
             @Override public boolean onShowFileChooser(WebView v,ValueCallback<Uri[]> cb,FileChooserParams p){
                 if(picker!=null)picker.onReceiveValue(null);picker=cb;
-                try{startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*"),89);}
+                try{startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(p.getAcceptTypes().length==1&&p.getAcceptTypes()[0].startsWith("image/")?"image/*":"*/*"),89);}
                 catch(ActivityNotFoundException e){picker=null;cb.onReceiveValue(null);}return true;
             }});
         web.addJavascriptInterface(new Bridge(),"Classroom");web.loadUrl(base+"room.html");
@@ -235,12 +236,29 @@ public final class RoomActivity extends Activity {
                             throw new Exception("سجّل الدخول لربط الصف.");
                         JSONObject result;
                         switch(operation){
+                            case "sharedSubjects":
                             case "sharedList":
                             case "sharedImage":
                             case "sharedPublish":
-                                String actionName=operation.equals("sharedList")?"sources":operation.equals("sharedImage")?"source":"addsource";
-                                if(owner && operation.equals("sharedPublish"))throw new Exception("النشر المشترك متاح لحساب الطالب.");
+                            case "sharedRemove":
+                            case "sharedStudy":
+                            case "sharedSolve":
+                            case "sharedDownload":
+                                String actionName;
+                                switch(operation){
+                                    case "sharedSubjects": actionName="subjects";break;
+                                    case "sharedList": actionName="sources";break;
+                                    case "sharedPublish": actionName="addsource";break;
+                                    case "sharedRemove": actionName="removesource";break;
+                                    case "sharedStudy": actionName="study";break;
+                                    case "sharedSolve": actionName="solve";break;
+                                    default: actionName="source";
+                                }
                                 result=owner?cloudRequest(input.put("op",actionName)):studentRequest(actionName,input);
+                                if(operation.equals("sharedDownload")){
+                                    prepareSourceDownload(result.getJSONObject("entry"));
+                                    result=RoomStore.obj();
+                                }
                                 break;
                             case "ownerEnrollment":
                                 if(!owner)throw new Exception("العملية للمالك.");
@@ -296,7 +314,7 @@ public final class RoomActivity extends Activity {
                     }else if(!owner&&(op.equals("getNote")||op.equals("saveNote"))){
                         if(!localData().getBoolean("remembered",false))throw new Exception("سجّل الدخول لفتح ملاحظاتك.");
                         int index=p.optInt("index",-1);
-                        if(index<0||index>4)throw new Exception("اختر مادة صالحة.");
+                        if(index<0||index>5)throw new Exception("اختر مادة صالحة.");
                         String key="note_"+index;
                         String note=p.optString("text","");
                         if(op.equals("saveNote")){
@@ -304,6 +322,17 @@ public final class RoomActivity extends Activity {
                             if(!localData().edit().putString(key,note).commit())throw new Exception("تعذّر حفظ الملاحظة.");
                         }
                         value=RoomStore.obj("text",localData().getString(key,""));
+                    }else if(op.equals("openStudyLink")){
+                        if(owner?token.isEmpty():!localData().getBoolean("remembered",false))
+                            throw new Exception("سجّل الدخول لفتح الرابط.");
+                        java.net.URI link=new java.net.URI(RoomStore.check(p,"url",2000));
+                        if(!"https".equals(link.getScheme())||link.getHost()==null||link.getUserInfo()!=null)
+                            throw new Exception("رابط الاختبار غير صالح.");
+                        runOnUiThread(()->{
+                            try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(link.toASCIIString())).addCategory(Intent.CATEGORY_BROWSABLE));}
+                            catch(ActivityNotFoundException e){noticeBackup(false,"تعذّر فتح رابط الاختبار.");}
+                        });
+                        value=RoomStore.obj();
                     }else if(owner&&op.equals("backup")){
                         backupPassword=RoomStore.check(p,"password",200);
                         if(backupPassword.length()<12)throw new Exception("اختر كلمة مرور للنسخة من 12 حرفًا على الأقل.");
@@ -359,12 +388,44 @@ public final class RoomActivity extends Activity {
         if(web==null||isDestroyed())return;
         web.evaluateJavascript("window.backupComplete("+success+","+JSONObject.quote(message)+")",null);
     }
+    private void prepareSourceDownload(JSONObject entry)throws Exception{
+        JSONObject file=entry.optJSONObject("file");
+        final String name=file==null?"QumDorous-source-"+entry.getLong("id")+".jpg":file.getString("name");
+        final String mime=file==null?"image/jpeg":"application/octet-stream";
+        String encoded=file==null?entry.getString("image").substring("data:image/jpeg;base64,".length()):file.getString("base64");
+        final byte[] bytes=android.util.Base64.decode(encoded,android.util.Base64.DEFAULT);
+        runOnUiThread(()->{
+            if(isFinishing()||isDestroyed())return;
+            if(pendingSourceDownload!=null){noticeBackup(false,"أكمل تنزيل المصدر الحالي أولًا.");return;}
+            pendingSourceDownload=bytes;
+            try{
+                startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType(mime).putExtra(Intent.EXTRA_TITLE,name),92);
+            }catch(ActivityNotFoundException e){pendingSourceDownload=null;noticeBackup(false,"تعذّر فتح نافذة التنزيل.");}
+        });
+    }
     @Override protected void onActivityResult(int code,int result,Intent data){
         super.onActivityResult(code,result,data);
         if(code==89&&picker!=null){
             Uri u=result==RESULT_OK&&data!=null?data.getData():null;
             picker.onReceiveValue(u!=null&&"content".equals(u.getScheme())?new Uri[]{u}:null);
             picker=null;
+            return;
+        }
+        if(code==92){
+            final byte[] bytes=pendingSourceDownload;
+            pendingSourceDownload=null;
+            final Uri destination=result==RESULT_OK&&data!=null?data.getData():null;
+            if(bytes!=null&&destination!=null&&"content".equals(destination.getScheme()))tasks.execute(()->{
+                try(java.io.OutputStream out=getContentResolver().openOutputStream(destination,"w")){
+                    if(out==null)throw new java.io.IOException();
+                    out.write(bytes);
+                }catch(Exception e){
+                    runOnUiThread(()->noticeBackup(false,"تعذّر حفظ المصدر."));
+                    return;
+                }
+                runOnUiThread(()->noticeBackup(true,"تم تنزيل المصدر."));
+            });
             return;
         }
         if(code!=90&&code!=91)return;

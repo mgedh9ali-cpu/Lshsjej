@@ -2,6 +2,8 @@ import { classroom } from './classroom.mjs';
 
 let initialized = false;
 const schema = [
+  "CREATE TABLE IF NOT EXISTS class_subjects (name TEXT PRIMARY KEY);",
+  "CREATE TABLE IF NOT EXISTS shared_lessons (id INTEGER PRIMARY KEY AUTOINCREMENT, subject TEXT NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL, answer INTEGER, created INTEGER NOT NULL);",
   "CREATE TABLE IF NOT EXISTS shared_sources (id INTEGER PRIMARY KEY AUTOINCREMENT, publisher TEXT NOT NULL, request_id TEXT NOT NULL, subject TEXT NOT NULL, title TEXT NOT NULL, image TEXT NOT NULL, added_by TEXT NOT NULL, created INTEGER NOT NULL, UNIQUE(publisher,request_id));",
   "CREATE INDEX IF NOT EXISTS shared_sources_subject_id ON shared_sources(subject,id DESC);",
   'CREATE TABLE IF NOT EXISTS students (id TEXT PRIMARY KEY, name TEXT NOT NULL, created INTEGER NOT NULL);',
@@ -58,8 +60,8 @@ export default {
     }
     try {
       const declaredSize = Number(request.headers.get('Content-Length'));
-      if (declaredSize > 600000) return send({error:'الطلب كبير جدًا.'}, 413);
-      const parsed = await readJson(request, 600000);
+      if (declaredSize > 1450000) return send({error:'الطلب كبير جدًا.'}, 413);
+      const parsed = await readJson(request, 1450000);
       const data = parsed?.data;
       if (data?.op !== 'addsource' && parsed?.size > 32768) return send({error:'الطلب كبير جدًا.'}, 413);
       if (!data || typeof data !== 'object' || Array.isArray(data)) return send({ error: 'صيغة الطلب غير صالحة.' }, 400);

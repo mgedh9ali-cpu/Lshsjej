@@ -19,7 +19,7 @@ async function readPayload(request) {
   const chunks = [];
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 600000) fail(413, 'الطلب كبير جدًا.');
+    if (size > 1450000) fail(413, 'الطلب كبير جدًا.');
     chunks.push(chunk);
   }
   let data;

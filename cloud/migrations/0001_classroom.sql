@@ -5,3 +5,6 @@ CREATE INDEX IF NOT EXISTS feedback_student ON feedback(student, created);
 
 CREATE TABLE IF NOT EXISTS shared_sources (id INTEGER PRIMARY KEY AUTOINCREMENT, publisher TEXT NOT NULL, request_id TEXT NOT NULL, subject TEXT NOT NULL, title TEXT NOT NULL, image TEXT NOT NULL, added_by TEXT NOT NULL, created INTEGER NOT NULL, UNIQUE(publisher,request_id));
 CREATE INDEX IF NOT EXISTS shared_sources_subject_id ON shared_sources(subject,id DESC);
+
+CREATE TABLE IF NOT EXISTS shared_lessons (id INTEGER PRIMARY KEY AUTOINCREMENT, subject TEXT NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL, answer INTEGER, created INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS class_subjects (name TEXT PRIMARY KEY);

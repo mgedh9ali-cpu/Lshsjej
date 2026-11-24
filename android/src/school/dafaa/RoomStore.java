@@ -40,7 +40,7 @@ final class RoomStore {
         if(!hasColumn("feedback","registration_id"))db.execSQL("ALTER TABLE feedback ADD COLUMN registration_id TEXT");
         if(!hasColumn("feedback","request_id"))db.execSQL("ALTER TABLE feedback ADD COLUMN request_id TEXT");
         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS feedback_request ON feedback(registration_id,request_id)");
-        for(String subject:new String[]{"الفيزياء","الكيمياء","العلوم","الإنجليزي","الرياضيات"})
+        for(String subject:new String[]{"الفيزياء","الكيمياء","العلوم","الإنجليزي","الرياضيات","اللغة العربية"})
             db.execSQL("INSERT OR IGNORE INTO subjects(name) VALUES(?)",new Object[]{subject});
     }
 

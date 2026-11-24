@@ -154,8 +154,16 @@ function unlock(){
 }
 const symbols=['ϟ','⚗','✿','Aa','∑'];
 const number=new Intl.NumberFormat('ar-SY');
-function home(){
-  const subjects=cache.subjects,grid=wrap('grid');
+async function home(){
+  const subjects=[...cache.subjects],grid=wrap('grid');
+  if(!owner&&!locked){
+    try{
+      const catalog=await rpc('sharedSubjects');
+      for(const {name:subjectName} of catalog.subjects){
+        if(!subjects.some(subject=>subject.name===subjectName))subjects.push({id:subjects.length+1,name:subjectName,sharedOnly:true});
+      }
+    }catch(err){message(err.message);}
+  }
   const render=q=>{
     const hits=subjects.filter(s=>s.name.includes(q));
     grid.replaceChildren(...hits.map(s=>{
@@ -170,7 +178,7 @@ function home(){
   const waiting=cache.feedback.filter(x=>!x.reply).length;
   return [hero(owner?'نظرة على الصف':'المواد الدراسية',owner?name:(name||'مكتبة الدروس')),
     owner&&wrap('grid stat-grid',tile('تسجيلات الطلاب','عرض المسجلين','◉',()=>go('accounts')),tile('صندوق الاقتراحات',number.format(waiting)+' بانتظار الرد','✉',()=>go('feedback')),tile('إشعار جديد','إرسال إلى الصف','＋',()=>go('feed'))),
-    owner&&button('منشورات الطلاب',()=>go('sharedAll'), 'primary'),owner&&el('h2','المواد الدراسية','section-title'),search,grid,owner&&form('مادة جديدة',[field('اسم المادة','name')],'إضافة مادة',async d=>{await rpc('addSubject',d);await go('home');})];
+    owner&&button('منشورات الطلاب',()=>go('sharedAll'), 'primary'),owner&&el('h2','المواد الدراسية','section-title'),search,grid,owner&&form('مادة جديدة',[field('اسم المادة','name')],'إضافة مادة',async d=>{await rpc('onlineAddSubject',d);await rpc('addSubject',d);await go('home');})];
 }
 function noticeCards(notices){
   return notices.map(n=>wrap('card',el('small',date(n.created)),el('h3',n.title),el('pre',n.body)));
@@ -373,27 +381,35 @@ async function prepareSourceImage(file){
     throw Error('تعذّر تجهيز الصورة. اختر صورة أصغر.');
   }finally{bitmap.close();}
 }
+function fileBase64(file){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>resolve(reader.result.split(',')[1]);
+    reader.onerror=()=>reject(Error('تعذّرت قراءة الملف.'));
+    reader.readAsDataURL(file);
+  });
+}
 function sourceForm(subject){
-  const upload=field('اختيار صورة من المعرض','file','file');
+  const upload=field('اختيار صورة أو ملف','file','file');
   upload.className='source-picker';
-  upload.querySelector('input').accept='image/jpeg,image/png,image/webp';
   const title=field('عنوان المصدر','title');
   title.querySelector('input').maxLength=180;
-  let previousFile='',previousTitle='',requestId='';
-  return form('',[title,upload],owner?'حفظ المصدر':'نشر في '+subject.name,async data=>{
-    const title=data.title.trim();
+  let previousPayload='',requestId='';
+  return form('',[title,upload],'نشر في '+subject.name,async data=>{
+    const title=data.title.trim(), selectedFile=data.file;
     if(!title)throw Error('اكتب عنوان المصدر.');
-    const image=await prepareSourceImage(data.file);
-    if(owner){
-      await rpc('addSource',{subject:subject.id,title,image});
+    if(!selectedFile.size)throw Error('اختر صورة أو ملفًا.');
+    let attachment;
+    if(['image/jpeg','image/png','image/webp'].includes(selectedFile.type)){
+      attachment={image:await prepareSourceImage(selectedFile)};
     }else{
-      if(previousFile!==image||previousTitle!==title){
-        previousFile=image;previousTitle=title;
-        requestId=crypto.randomUUID();
-      }
-      await rpc('sharedPublish',{subject:subject.name,title,image,requestId});
+      if(selectedFile.size>1048576)throw Error('حجم الملف يجب ألا يتجاوز ١ ميغابايت.');
+      attachment={file:{name:selectedFile.name,base64:await fileBase64(selectedFile)}};
     }
-    if(!owner)message('نُشر المصدر في '+subject.name+'.');
+    const payload=JSON.stringify({title,...attachment});
+    if(previousPayload!==payload){previousPayload=payload;requestId=crypto.randomUUID();}
+    await rpc('sharedPublish',{subject:subject.name,title,...attachment,requestId});
+    message('نُشر المصدر في '+subject.name+'.');
     await go('subject',subject);
   });
 }
@@ -427,12 +443,14 @@ function sharedFeed(subject){
         photo.replaceChildren(el('p',err.message,'empty-state'),button('إعادة تحميل الصورة',photo.loadSourceImage));
       }
     };
-    observer.observe(photo);
+    if(!entry.attachment)observer.observe(photo);
     const metadata=[entry.added_by,subject?null:entry.subject,dateTime(entry.created)].filter(Boolean).join(' · ');
-    const post=wrap('card',el('strong',entry.title),el('small',metadata),photo);
-    if(owner)post.append(button('حذف المنشور',async()=>{
+    const post=wrap('card',el('strong',entry.title),el('small',metadata));
+    if(!entry.attachment)post.append(photo);
+    post.append(button('تنزيل المصدر',()=>rpc('sharedDownload',{id:entry.id})));
+    if(owner||entry.mine)post.append(button('حذف المنشور',async()=>{
         if(!confirm('حذف هذا المصدر من جميع أجهزة الصف؟'))return;
-        await rpc('onlineRemoveSource',{id:entry.id});
+        await rpc('sharedRemove',{id:entry.id});
         await load();
       }));
     return post;
@@ -441,7 +459,7 @@ function sharedFeed(subject){
     if(loading)return;
     loading=true;
     try{
-      const data=await rpc('sharedList',{subject,before:cursor});
+      const data=await rpc('sharedList',{subject,before:cursor,files:true});
       if(!section.isConnected)return;
       if(append){
         entries.push(...data.entries);
@@ -467,14 +485,65 @@ function sharedFeed(subject){
 function sharedAll(){
   return [hero('منشورات الطلاب','كل المواد'),sharedFeed()];
 }
+function studyPanel(subject){
+  const list=wrap('registration-list');
+  const status=el('p','جارٍ تحميل المحتوى…','empty-state');
+  const children=[status,list];
+  async function refresh(){
+    try{
+      const {entries}=await rpc('sharedStudy',{subject:subject.name});
+      status.textContent=entries.length?'':'لا توجد اختبارات أو ملخصات بعد.';
+      list.replaceChildren(...entries.map(entry=>{
+        const post=wrap('card',el('h3',entry.title));
+        if(entry.kind==='summary')post.append(el('pre',entry.body));
+        if(entry.kind==='link')post.append(button('فتح رابط الاختبار',()=>rpc('openStudyLink',{url:entry.body})));
+        if(entry.kind==='quiz'){
+          const result=el('p');
+          const choices=entry.body.choices.map((choice,index)=>button(choice,()=>grade(index)));
+          const options=wrap('row',...choices);
+          let submitting=false;
+          const grade=async index=>{
+            if(submitting)return;
+            submitting=true;
+            try{
+              const score=await rpc('sharedSolve',{id:entry.id,choice:index});
+              result.textContent=score.correct?'إجابة صحيحة':'الإجابة الصحيحة · '+entry.body.choices[score.answer];
+              options.hidden=true;
+            }catch(error){submitting=false;throw error;}
+          };
+          if(owner)choices.forEach(choice=>{choice.disabled=true;});
+          post.append(el('p',entry.body.question),options,result);
+        }
+        return post;
+      }));
+    }catch(err){status.textContent=err.message;}
+  }
+  if(owner){
+    const title=()=>field('العنوان','title');
+    const send=kind=>async(data,status)=>{
+      const extra=kind==='quiz'?{choices:data.choices.split('\n').map(v=>v.trim()).filter(Boolean),answer:Number(data.answer)-1}:{};
+      await rpc('onlineAddLesson',{...data,...extra,kind,subject:subject.name});
+      status.textContent='تم النشر.';
+      await refresh();
+    };
+    const editor=el('details');
+    editor.append(el('summary','إضافة اختبار أو ملخص'),
+      form('ملخص',[title(),field('نص الملخص','body','textarea')],'نشر الملخص',send('summary')),
+      form('رابط اختبار',[title(),field('رابط HTTPS','body','url')],'نشر الرابط',send('link')),
+      form('اختبار داخل التطبيق',[title(),field('السؤال','question'),field('الخيارات · كل خيار بسطر','choices','textarea'),field('رقم الإجابة الصحيحة بداية من ١','answer','number')],'نشر الاختبار',send('quiz')));
+    children.unshift(editor);
+  }
+  refresh();
+  return wrap('registration-list',...children);
+}
 let tab='sources';
 async function subject(item){
-  const s=cache.subjects.find(s=>s.id===selected.id);selected=s;
-  const content=await rpc('subject',{subject:s.id});
-  const controls=wrap('row',button('المصادر',()=>{tab='sources';return go('subject',s);},tab==='sources'?'primary':''),button('الاختبارات',()=>{tab='quizzes';return go('subject',s);},tab==='quizzes'?'primary':''));
+  const s=selected.sharedOnly?selected:cache.subjects.find(s=>s.id===selected.id);selected=s;
+  const content=s.sharedOnly?{sources:[],quizzes:[]}:await rpc('subject',{subject:s.id});
+  const controls=wrap('row',button('المصادر',()=>{tab='sources';return go('subject',s);},tab==='sources'?'primary':''),button('الاختبارات والملخصات',()=>{tab='quizzes';return go('subject',s);},tab==='quizzes'?'primary':''));
   if(tab==='quizzes'){
-    return [hero(s.name,'اختبارات المادة'),controls,owner&&form('مسودة سؤال اختباري',[field('عنوان الاختبار','title'),field('السؤال','question'),field('الخيارات · كل خيار بسطر','choices','textarea'),field('رقم الإجابة الصحيحة بداية من ١','answer','number')],'حفظ المسودة',async d=>{await rpc('draft',{...d,subject:s.id,choices:d.choices.split('\n').map(x=>x.trim()).filter(Boolean),answer:Number(d.answer)-1});await go('subject',s);}),
-      ...content.quizzes.map(q=>wrap('card',el('small',q.published?'منشور':'بانتظار الاعتماد'),button(q.title,()=>go('quiz',q)),...(!q.published&&owner?[button('اعتماد ونشر',async()=>{await rpc('publish',{id:q.id});await go('subject',s);})]:[]))),!content.quizzes.length&&el('p','لم يُنشر اختبار لهذه المادة بعد.')];
+    return [hero(s.name,''),controls,studyPanel(s),
+      ...content.quizzes.map(q=>wrap('card',el('small',q.published?'منشور':'بانتظار الاعتماد'),button(q.title,()=>go('quiz',q)),...(!q.published&&owner?[button('اعتماد ونشر',async()=>{await rpc('publish',{id:q.id});await go('subject',s);})]:[])))];
   }
   let last='';
   const items=[];let count=0;const dayCounts={};for(const d of content.sources){const k=date(d.created);dayCounts[k]=(dayCounts[k]||0)+1;}
