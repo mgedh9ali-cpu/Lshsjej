@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { classroom } from './classroom.mjs';
 
 let initialized = false;
@@ -57,8 +58,18 @@ export default {
     try {
       const data = await readJson(request);
       if (!data || typeof data !== 'object' || Array.isArray(data)) return send({ error: 'صيغة الطلب غير صالحة.' }, 400);
+      const authorization = request.headers.get('Authorization') || '';
+      const device = authorization.match(/^Device ([a-zA-Z0-9_-]{43})$/)?.[1];
+      if (device && device === data.device && ['sync', 'suggest'].includes(data.op)) {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        const allowed = await env.STUDENT_RATE.limit({ key: ip });
+        if (!allowed.success || (data.op === 'suggest' &&
+            !(await env.SUGGESTION_RATE.limit({ key: createHash('sha256').update(device).digest('hex') })).success)) {
+          return send({ error: 'انتظر قليلًا ثم حاول مجددًا.' }, 429);
+        }
+      }
       const handle = classroom(database(env.DB), env.QUM_OWNER_KEY, env.QUM_STUDENT_KEY, () => initialize(env.DB));
-      return send(await handle(request.headers.get('Authorization') || '', data));
+      return send(await handle(authorization));
     } catch (error) {
       return send({ error: error.status ? error.message : 'تعذّر تنفيذ الطلب على خدمة الصف.' }, error.status || 500);
     }

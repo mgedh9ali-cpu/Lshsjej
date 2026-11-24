@@ -44,7 +44,10 @@ export function classroom(db, owner, invite, initialize) {
         default: fail(400, 'العملية غير متاحة.');
       }
     }
-    if (!timingSafeEqual(key, hashInvite)) fail(401, 'تحقّق من مفتاح الصف.');
+    const deviceToken = authorization.match(/^Device ([a-zA-Z0-9_-]{43})$/)?.[1];
+    if (!timingSafeEqual(key, hashInvite) && (!deviceToken || deviceToken !== data.device)) {
+      fail(401, 'تعذّر التحقق من اتصال الطالب.');
+    }
     if (!['sync','suggest'].includes(data.op)) fail(400, 'العملية غير متاحة.');
     await initialize();
     const student = digest(identifier(data.device)).toString('hex');

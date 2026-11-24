@@ -8,3 +8,13 @@ workers_dev = true
 binding = "DB"
 database_name = "qum-dorous"
 database_id = "123d5d0c-1fff-45c4-b834-352be7dbb307"
+
+[[ratelimits]]
+name = "STUDENT_RATE"
+namespace_id = "71040516"
+simple = { limit = 300, period = 60 }
+
+[[ratelimits]]
+name = "SUGGESTION_RATE"
+namespace_id = "71040517"
+simple = { limit = 8, period = 60 }
