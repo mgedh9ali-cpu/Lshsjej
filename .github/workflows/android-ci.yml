@@ -71,7 +71,7 @@ jobs:
           for edition in Student Owner; do
             apk="dist/QumDorous-$edition-0.8.0.apk"
             "$build_tools/apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/$edition-signature.txt"
-            grep -Fix 'Signer #1 certificate SHA-256 digest: e367dac18a227a524a546c34732369f96dcf96150495deeb4cda7d755c1dd6c9' "$RUNNER_TEMP/$edition-signature.txt"
+            grep -Fix 'Signer #1 certificate SHA-256 digest: 4800bdbc6d0164f45bae53daf6e60d2034634832c958c8cc43ca8136f07ee8fb' "$RUNNER_TEMP/$edition-signature.txt"
             package=school.dafaa
             [[ "$edition" != Owner ]] || package=school.dafaa.owner
             "$build_tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/apk-badging.txt"
