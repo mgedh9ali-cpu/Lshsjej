@@ -17,8 +17,8 @@ test('ships separate student and owner launchers without the hosted web app', ()
     const source = read('android/' + manifest);
     assert.ok(source.includes('package="' + id + '"'));
     assert.ok(source.includes('android:name="' + activity + '"'));
-    assert.match(source, /android:versionCode="20"/);
-    assert.match(source, /android:versionName="0\.7\.7"/);
+    assert.match(source, /android:versionCode="21"/);
+    assert.match(source, /android:versionName="0\.7\.8"/);
     assert.match(source, /android:usesCleartextTraffic="false"/);
     assert.doesNotMatch(source, /android.intent.category.BROWSABLE/);
   }
@@ -105,36 +105,10 @@ test('the student inbox keeps received notices visible offline', async () => {
   assert.deepEqual(requests, [['studentNotices', true], ['studentNotices', false]]);
 });
 
-test('OCR emits engine progress and reloads the image for a low-confidence retry', async () => {
-  const statuses = [], reads = [], languages = [];
-  let report;
-  let mode;
-  const api = {
-    Init(_data, language) { languages.push(language); return 0; },
-    SetPageSegMode(value) { mode = value; },
-    SetImageFile() { reads.push(mode); return 0; },
-    Recognize() { report(58); return 0; },
-    GetUTF8Text() { return mode === 3 ? 'نص' : 'نص عربي واضح'; },
-    MeanTextConf() { return mode === 3 ? 40 : 85; },
-    Clear() {},
-  };
-  const env = {
-    onmessage: null, importScripts() {}, postMessage: value => statuses.push(value),
-    atob, models: { ara: '' }, ArrayBuffer, Uint8Array,
-    TesseractCore: async options => {
-      report = options.TesseractProgress;
-      return { FS: { writeFile() {} }, TessBaseAPI: function () { return api; } };
-    },
-  };
-  runInNewContext(read('android/offline/ocr-worker.js'), env);
-  await env.onmessage({ data: { bytes: new ArrayBuffer(2), language: 'ara' } });
-  assert.deepEqual(languages, ['ara']);
-  assert.deepEqual(reads, [3, 6]);
-  assert.ok(statuses.some(value => value.stage === 'recognize' && value.percent === 40));
-  assert.ok(statuses.some(value => value.stage === 'retry'));
-  assert.equal(statuses.at(-1).text, 'نص عربي واضح');
+test('source images are published without text extraction', () => {
+  assert.match(read('android/room/room.js'), /rpc\('addSource',\{subject:subject.id,title,image\}\)/);
+  assert.doesNotMatch(read('android/build.sh'), /prepare-ocr|offline\/\*/);
 });
-
 test('the packaged offline catalog contains valid Arabic subject data', () => {
   const temp = mkdtempSync(join(tmpdir(), 'qum-catalog-'));
   try {

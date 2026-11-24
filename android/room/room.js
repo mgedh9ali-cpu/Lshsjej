@@ -106,7 +106,6 @@ async function boot(){
   await go(locked&&!owner?'unlock':owner&&!name?'login':'home');
 }
 async function go(next,item,focusPage=false){
-  activeReading?.abort();
   if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
   page=next;const mine=++revision;
   if(item&&(next==='subject'||next==='newSource'))selected=item;
@@ -141,7 +140,7 @@ function login(){
 }
 function unlock(){
   return [hero('قوم دروس','حساب الطالب على هذا الهاتف'),
-    !hasAccount&&el('p','تبقى كلمة السر على هاتفك. بعد ربط الصف، يظهر اسمك في لوحة المالك.','empty-state'),
+    !hasAccount&&el('p','تبقى كلمة السر على هاتفك. عند توفر الإنترنت، يُرسل اسمك تلقائيًا إلى لوحة المالك.','empty-state'),
     form(hasAccount?'تسجيل الدخول':'إنشاء حساب الطالب',[
       field('الاسم','name','text',name),field('كلمة السر · ٦ أحرف على الأقل','password','password')
     ],hasAccount?'دخول':'تسجيل',async data=>{
@@ -270,9 +269,21 @@ function updateRegistrationList(container, data){
     ...(!data.entries.length?[el('p','تظهر هنا أسماء الطلاب بعد ربط الصف.','empty-state')]:[]));
 }
 async function refreshRegistrations(container){
-  try{const data=await rpc(cloudUrl?'onlineRegistrations':'registrations');if(container.isConnected)updateRegistrationList(container,data);}
-  catch(err){message(err.message);}
+  if(!container?.isConnected||container.dataset.loading)return;
+  container.dataset.loading='true';
+  try{
+    const data=await rpc(cloudUrl?'onlineRegistrations':'registrations');
+    const snapshot=JSON.stringify(data);
+    if(container.isConnected&&container.dataset.snapshot!==snapshot){
+      updateRegistrationList(container,data);
+      container.dataset.snapshot=snapshot;
+    }
+  }catch(err){if(container.isConnected&&!container.dataset.snapshot)container.replaceChildren(el('p',err.message,'empty-state'));}
+  finally{delete container.dataset.loading;}
 }
+setInterval(()=>{
+  if(owner&&page==='accounts'&&!document.hidden)refreshRegistrations($('#registrations'));
+},5000);
 async function accounts(){
   const list=wrap('registration-list');list.id='registrations';
   return [hero('الطلاب',cloudUrl?'تسجيلات الصف':'التسجيلات المحفوظة'),list,
@@ -311,13 +322,22 @@ async function notes(){
     })];
 }
 function settings(){
-  const origin='https://lshsjej.mgedh-9ali.workers.dev';
-  return [hero('الإعدادات',name||'قوم دروس'),
-    owner&&form('اتصال لوحة المالك',[field('مفتاح المالك','key','password')],
-      cloudUrl?'تحديث الاتصال':'ربط الصف',async(data,status)=>{
-        await rpc('configureCloud',{...data,url:cloudUrl||origin});cloudUrl=cloudUrl||origin;
-        status.textContent='تم ربط الصف عبر الإنترنت.';
-      }),
+  const enrollment=owner?wrap('card',el('h2','اتصال لوحة المالك')):null;
+  if(enrollment){
+    const status=el('p','جارٍ التحقق من الاتصال…');
+    enrollment.append(status);
+    rpc('onlineStatus').then(()=>{status.textContent='متصل بالصف عبر الإنترنت.';}).catch(async error=>{
+      status.textContent=error.message;
+      if(!error.message.includes('بانتظار اعتماد'))return;
+      try{
+        const {code}=await rpc('ownerEnrollment');
+        const label=field('رمز اعتماد هذا الهاتف','device','text',code);
+        label.querySelector('input').readOnly=true;
+        enrollment.append(label);
+      }catch(err){status.textContent=err.message;}
+    });
+  }
+  return [hero('الإعدادات',name||'قوم دروس'),enrollment,
     offline&&button('ملاحظاتي',()=>go('notes')),
     owner&&wrap('card',el('h2','النسخ الاحتياطي المشفّر'),
       el('p','احفظ نسخة من بيانات هذه اللوحة على الهاتف. لبيانات الصف عبر الإنترنت نسخة احتياطية تُؤخذ من الخادم.'),
@@ -329,156 +349,40 @@ function settings(){
         await rpc('restore',{password:d.password});message('اختر ملف النسخة لاستعادة البيانات.');
       })
     ),
-    offline&&hasAccount&&!locked&&button('تسجيل الخروج',async()=>{await rpc('lock');locked=true;await go('unlock');}),
     !offline&&button('تسجيل الخروج',async()=>{await rpc('logout');name='';await go('login');})];
 }
-let activeReading=null;
-function ocr(bytes,language,onProgress,signal){
-  const worker=new Worker('ocr-worker.js');
-  return new Promise((resolve,reject)=>{
-    const cancel=()=>finish(Error('أُوقفت القراءة.'));
-    const finish=(error,value)=>{
-      clearTimeout(timer);
-      signal.removeEventListener('abort',cancel);
-      worker.terminate();
-      if(error)reject(error);else resolve(value);
-    };
-    const timer=setTimeout(()=>finish(Error('انتهت مهلة القراءة. جرّب قصّ الصفحة أو اكتب النص يدويًا.')),65000);
-    signal.addEventListener('abort',cancel,{once:true});
-    worker.onerror=()=>finish(Error('تعذّر تشغيل قارئ الصور.'));
-    worker.onmessage=({data})=>{
-      if(data.type==='progress'){onProgress(data);return;}
-      finish(data.error?Error('تعذّرت قراءة الصورة. جرّب قصّها أو اكتب النص يدويًا.'):null,data);
-    };
-    worker.postMessage({bytes,language},[bytes]);
-  });
-}
-async function prepareSourceImage(file,crop,rotation,signal){
-  const image=await createImageBitmap(file);
+async function prepareSourceImage(file){
+  if(!file.size||file.size>15000000)throw Error('اختر صورة حتى ١٥ ميغابايت.');
+  const bitmap=await createImageBitmap(file);
   try{
-    if(signal.aborted)throw Error('أُوقفت القراءة.');
-    const width=crop==='whole'?image.width:Math.ceil(image.width/2);
-    const left=crop==='right'?image.width-width:0;
-    const scale=Math.min(1,1850/Math.max(width,image.height),Math.sqrt(2300000/(width*image.height)));
     const canvas=el('canvas');
-    const scaledWidth=Math.max(1,Math.round(width*scale));
-    const scaledHeight=Math.max(1,Math.round(image.height*scale));
-    const sideways=rotation===90||rotation===270;
-    canvas.width=sideways?scaledHeight:scaledWidth;
-    canvas.height=sideways?scaledWidth:scaledHeight;
-    const ctx=canvas.getContext('2d',{willReadFrequently:true});
-    ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);
-    ctx.save();
-    ctx.translate(canvas.width/2,canvas.height/2);
-    ctx.rotate(rotation*Math.PI/180);
-    ctx.drawImage(image,left,0,width,image.height,-scaledWidth/2,-scaledHeight/2,scaledWidth,scaledHeight);
-    ctx.restore();
-    let original=canvas.toDataURL('image/jpeg',.72);
-    if(original.length>550000)original=canvas.toDataURL('image/jpeg',.42);
-    if(original.length>550000)throw Error('قص الصورة حول النص أو اختر صورة أصغر.');
-    const pixels=ctx.getImageData(0,0,canvas.width,canvas.height);
-    const histogram=new Uint32Array(256);
-    const data=pixels.data;
-    for(let i=0;i<data.length;i+=4){
-      const level=(77*data[i]+150*data[i+1]+29*data[i+2])>>8;
-      histogram[level]++;data[i]=level;
+    const ctx=canvas.getContext('2d');
+    for(let limit=1850;limit>=450;limit=Math.floor(limit*.75)){
+      const scale=Math.min(1,limit/Math.max(bitmap.width,bitmap.height));
+      canvas.width=Math.max(1,Math.round(bitmap.width*scale));
+      canvas.height=Math.max(1,Math.round(bitmap.height*scale));
+      ctx.fillStyle='#fff';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.drawImage(bitmap,0,0,canvas.width,canvas.height);
+      const image=canvas.toDataURL('image/jpeg',.78);
+      if(image.length<=550000)return image;
     }
-    const count=data.length/4;
-    let low=0,high=255,seen=0;
-    while(low<254&&seen+histogram[low]<count*.035)seen+=histogram[low++];
-    seen=0;
-    while(high>1&&seen+histogram[high]<count*.96)seen+=histogram[high--];
-    const spread=Math.max(48,high-low);
-    for(let i=0;i<data.length;i+=4)data[i]=data[i+1]=data[i+2]=255*(data[i]-low)/spread;
-    ctx.putImageData(pixels,0,0);
-    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.9));
-    if(!blob)throw Error('تعذّر تجهيز الصورة.');
-    return {original,bytes:await blob.arrayBuffer()};
-  }finally{image.close();}
+    throw Error('تعذّر تجهيز الصورة. اختر صورة أصغر.');
+  }finally{bitmap.close();}
 }
 function sourceForm(subject){
   const upload=field('اختيار صورة من المعرض','file','file');
   upload.className='source-picker';
-  const picker=upload.querySelector('input');
-  picker.accept='image/jpeg,image/png,image/webp';
-  const fileLabel=el('small','JPG · PNG · WEBP');
-  upload.append(fileLabel);
-  picker.onchange=()=>{fileLabel.textContent=picker.files[0]?.name||'JPG · PNG · WEBP';};
-  const select=(label,key,options,initial)=>{
-    const row=el('label',label,'field'), input=el('select');
-    input.name=key;
-    for(const [value,text] of options){const option=el('option',text);option.value=value;input.append(option);}
-    input.value=initial;row.append(input);return row;
-  };
-  const language=select('لغة الصورة','language',[['ara','العربية'],['eng','الإنجليزية'],['ara+eng','عربية وإنجليزية']],subject.name.includes('الإنجليزي')?'eng':'ara');
-  const crop=select('الجزء المطلوب','crop',[['whole','الصورة كاملة'],['right','الصفحة اليمنى'],['left','الصفحة اليسرى']],'whole');
-  const progress=el('progress');progress.max=100;progress.value=0;progress.hidden=true;
-  progress.setAttribute('aria-label','تقدّم قراءة الصورة');
-  const preview=wrap('registration-list');
-  const cancel=button('إيقاف القراءة',()=>activeReading?.abort());cancel.hidden=true;
-  const options=el('details','','source-options');
-  const rotation=select('اتجاه الصورة','rotation',[
-    ['0','كما هي'],['90','تدوير يمينًا'],['270','تدوير يسارًا'],['180','قلب الصورة'],
-  ],'0');
-  options.append(el('summary','خيارات القراءة'),language,crop,rotation);
-  const manual=el('button','كتابة النص يدويًا','back-action');manual.type='submit';
-  const scan=form('',[upload,options,progress,cancel],'قراءة الصورة',async(data,status,submitter)=>{
-    if(!data.file.size||data.file.size>15000000)throw Error('اختر صورة حتى ١٥ ميغابايت.');
-    const controller=new AbortController();
-    activeReading=controller;manual.disabled=true;preview.replaceChildren();
-    progress.hidden=false;progress.value=0;cancel.hidden=false;
-    const show=(percent,label)=>{
-      progress.value=Math.max(percent,progress.value);
-      status.textContent=label+' · '+number.format(progress.value)+'٪';
-    };
-    try{
-      show(5,'جارٍ تجهيز الصورة');
-      const {original,bytes}=await prepareSourceImage(data.file,data.crop,Number(data.rotation),controller.signal);
-      if(controller.signal.aborted)return;
-      let result={text:'',confidence:0},failure='';
-      if(submitter!==manual)try{
-        let retry=false;
-        result=await ocr(bytes,data.language,event=>{
-          if(event.stage==='retry')retry=true;
-          if(event.stage==='recognize'){
-            const percent=Math.round(Math.max(0,Math.min(100,Number(event.percent)||0)));
-            show(retry?90+Math.round(percent*.08):25+Math.round(percent*.62),retry?'جارٍ إعادة فحص السطور':'جارٍ قراءة السطور');
-          }else{
-            const stage={engine:[10,'جارٍ تشغيل القارئ'],models:[17,'جارٍ تحميل نموذج اللغة'],retry:[90,'جارٍ إعادة فحص السطور'],finish:[98,'جارٍ تجهيز المعاينة']}[event.stage];
-            if(stage)show(...stage);
-          }
-        },controller.signal);
-      }catch(error){if(controller.signal.aborted)return;failure=error.message;}
-      if(controller.signal.aborted||!preview.isConnected)return;
-      const text=result.text.slice(0,16000);
-      const latin=(text.match(/[A-Za-z]/g)||[]).length;
-      const arabic=(text.match(/[\u0621-\u064a]/g)||[]).length;
-      const needsReview=result.confidence<70||text.length<8||(data.language==='ara'&&latin>Math.max(3,arabic*.1));
-      const titleField=field('عنوان المصدر','title','text',text.split('\n').find(line=>line.trim())?.trim().slice(0,180)||'');
-      titleField.querySelector('input').maxLength=180;
-      const bodyField=field('النص المقروء','body','textarea',text);
-      bodyField.querySelector('textarea').maxLength=16000;
-      bodyField.querySelector('textarea').rows=8;
-      const image=el('img');image.src=original;image.alt='صورة المصدر للمقارنة مع النص';
-      const save=form('معاينة وتعديل النص',[titleField,bodyField,image],offline?'حفظ المصدر':'نشر المصدر',async values=>{
-        const title=values.title.trim(),body=values.body.trim();
-        if(!title||!body)throw Error('اكتب عنوان المصدر والنص أولًا.');
-        await rpc('addSource',{subject:subject.id,title,body,image:original});
-        await go('subject',subject);
-      });
-      preview.append(save);
-      preview.scrollIntoView({block:'start'});
-      if(submitter===manual){progress.hidden=true;status.textContent='';}
-      else if(failure){progress.hidden=true;status.textContent=failure;}
-      else show(100,needsReview?'النص يحتاج مراجعة قبل الحفظ':'اكتملت القراءة. راجع النص قبل الحفظ');
-    }finally{
-      cancel.hidden=true;manual.disabled=false;
-      if(controller.signal.aborted){progress.hidden=true;status.textContent='أُوقفت القراءة.';}
-      if(activeReading===controller)activeReading=null;
-    }
+  upload.querySelector('input').accept='image/jpeg,image/png,image/webp';
+  const title=field('عنوان المصدر','title');
+  title.querySelector('input').maxLength=180;
+  return form('',[title,upload],offline?'حفظ المصدر':'نشر المصدر',async data=>{
+    const title=data.title.trim();
+    if(!title)throw Error('اكتب عنوان المصدر.');
+    const image=await prepareSourceImage(data.file);
+    await rpc('addSource',{subject:subject.id,title,image});
+    await go('subject',subject);
   });
-  scan.classList.add('source-scan');scan.append(manual);
-  return wrap('registration-list',scan,preview);
 }
 let tab='sources';
 async function subject(item){
@@ -500,7 +404,7 @@ function newSource(){
     hero('إضافة مصدر',selected.name),sourceForm(selected)];
 }
 async function source(item){const record=await rpc('source',{id:item.id});const img=el('img');img.src=record.image instanceof Blob?(previewUrl=URL.createObjectURL(record.image)):record.image;img.alt='صورة المصدر';
-  return [button('العودة للمادة',()=>go('subject',selected)),hero(record.title,date(record.created)+(owner&&record.added_by?' · أضافه '+record.added_by:'')),wrap('card',el('pre',record.body),img),owner&&button('حذف المصدر',async()=>{if(confirm('حذف هذا المصدر من الصف؟')){await rpc('remove',{id:item.id});await go('subject',selected);}})];}
+  return [button('العودة للمادة',()=>go('subject',selected)),hero(record.title,date(record.created)+(owner&&record.added_by?' · أضافه '+record.added_by:'')),wrap('card',...(record.body?[el('pre',record.body)]:[]),img),owner&&button('حذف المصدر',async()=>{if(confirm('حذف هذا المصدر من الصف؟')){await rpc('remove',{id:item.id});await go('subject',selected);}})];}
 async function quiz(item){const q=await rpc('quiz',{id:item.id}),choices=JSON.parse(q.choices),result=el('p');
   return [hero(q.title,selected.name),wrap('card',el('h3',q.question),...choices.map((v,i)=>button(v,async()=>{if(owner){message('معاينة المالك');return;}const score=await rpc('solve',{id:item.id,choice:i});result.textContent=i===score.answer?'إجابة صحيحة':'الإجابة الصحيحة · '+choices[score.answer];})),result),button('العودة للمادة',()=>go('subject',selected))];}
 window.backPage=()=>{if(page==='source'||page==='quiz'||page==='newSource'){go('subject',selected);return true;}if(page==='notes'){go('settings');return true;}if(!owner&&locked)return false;if((name||offline)&&page!=='home'){go('home');return true;}return false;};

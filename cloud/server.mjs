@@ -12,7 +12,7 @@ mkdirSync(dirname(location), { recursive: true, mode: 0o700 });
 const db = new DatabaseSync(location);
 db.exec('PRAGMA journal_mode=WAL;');
 db.exec(readFileSync(new URL('./migrations/0001_classroom.sql', import.meta.url), 'utf8'));
-const handle = classroom(db, owner, invite);
+const handle = classroom(db, owner, invite, process.env.QUM_OWNER_DEVICE_HASH);
 const fail = (status, message) => { throw Object.assign(Error(message), { status }); };
 async function readPayload(request) {
   let size = 0;

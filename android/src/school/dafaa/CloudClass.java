@@ -32,6 +32,14 @@ final class CloudClass {
         return request(DEFAULT_ORIGIN, "Device " + device, payload);
     }
 
+    static final class Unauthorized extends Exception {
+        Unauthorized(String message) { super(message); }
+    }
+
+    static JSONObject ownerDevice(String origin, String device, JSONObject payload) throws Exception {
+        return request(origin, "OwnerDevice " + device, payload);
+    }
+
     private static JSONObject request(String origin, String authorization, JSONObject payload) throws Exception {
         if (origin.isEmpty()) throw new Exception("اضبط اتصال الصف عبر الإنترنت من الإعدادات.");
         HttpsURLConnection connection = (HttpsURLConnection) new URL(origin + "/v1/classroom").openConnection();
@@ -57,6 +65,8 @@ final class CloudClass {
                     body.write(bytes, 0, length);
                 }
                 JSONObject result = new JSONObject(new String(body.toByteArray(), StandardCharsets.UTF_8));
+                if (status == 401)
+                    throw new Unauthorized(result.optString("error", "تعذّر التحقق من الاتصال."));
                 if (status != 200) throw new Exception(result.optString("error", "استجابة غير صالحة من خادم الصف."));
                 return result;
             }

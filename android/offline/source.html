@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob:; connect-src 'none'; object-src 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'none'; object-src 'none'">
   <title>مصادر المادة</title>
   <link rel="stylesheet" href="room.css">
 </head>
@@ -12,8 +12,9 @@
     <header class="hero"><h1 id="subject"></h1><small>مصادر المادة</small></header>
     <form>
       <h2>إضافة مصدر</h2>
+      <label class="field">عنوان المصدر<input id="title" maxlength="180" required></label>
       <label class="field">صورة صفحة من الدرس<input id="photo" type="file" accept="image/jpeg,image/png,image/webp" required></label>
-      <button id="read" class="primary">قراءة الصورة</button>
+      <button id="read" class="primary">حفظ المصدر</button>
       <p id="status" role="status"></p>
     </form>
     <h2>مصادري المحفوظة</h2>

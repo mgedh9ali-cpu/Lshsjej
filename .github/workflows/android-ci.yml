@@ -65,29 +65,29 @@ jobs:
       - name: Build Android student application
         run: |
           mkdir -p dist
-          bash android/build.sh dist/QumDorous-Student-0.7.7.apk student
+          bash android/build.sh dist/QumDorous-Student-0.7.8.apk student
       - name: Build Android owner application
-        run: bash android/build.sh dist/QumDorous-Owner-0.7.7.apk owner
+        run: bash android/build.sh dist/QumDorous-Owner-0.7.8.apk owner
       - name: Verify Android packages
         run: |
           build_tools="$ANDROID_SDK_ROOT/build-tools/35.0.0"
           for edition in Student Owner; do
-            apk="dist/QumDorous-$edition-0.7.7.apk"
+            apk="dist/QumDorous-$edition-0.7.8.apk"
             "$build_tools/apksigner" verify --verbose --print-certs "$apk"
             package=school.dafaa
             [[ "$edition" != Owner ]] || package=school.dafaa.owner
             "$build_tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/apk-badging.txt"
-            grep -F "package: name='$package' versionCode='20' versionName='0.7.7'" "$RUNNER_TEMP/apk-badging.txt"
+            grep -F "package: name='$package' versionCode='21' versionName='0.7.8'" "$RUNNER_TEMP/apk-badging.txt"
             unzip -Z1 "$apk" > "$RUNNER_TEMP/apk-files.txt"
-            for asset in room.html room.js room.css core.js models.js student.sqlite cairo.woff2; do
+            for asset in room.html room.js room.css student.sqlite cairo.woff2; do
               grep -Fx "assets/$asset" "$RUNNER_TEMP/apk-files.txt"
             done
-            if grep -Ex 'assets/(student-origin.txt|admin.html|student.html)' "$RUNNER_TEMP/apk-files.txt"; then exit 1; fi
+            if grep -Ex 'assets/(student-origin.txt|admin.html|student.html|ocr-worker.js|core.js|models.js)' "$RUNNER_TEMP/apk-files.txt"; then exit 1; fi
           done
           sha256sum dist/*.apk > dist/SHA256SUMS.txt
       - name: Save both APKs as build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: QumDorous-Android-0.7.7-${{ env.SCHOOL_SIGN_MODE }}
+          name: QumDorous-Android-0.7.8-${{ env.SCHOOL_SIGN_MODE }}
           path: dist/
           if-no-files-found: error

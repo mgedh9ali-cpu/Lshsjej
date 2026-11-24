@@ -10,7 +10,7 @@ function identifier(value) {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{32,64}$/.test(value)) fail(400, 'معرّف العملية غير صالح.');
   return value;
 }
-export function classroom(db, owner, invite) {
+export function classroom(db, owner, invite, ownerDeviceHash) {
   const notices = () => db.prepare('SELECT * FROM notices ORDER BY id DESC LIMIT 100').all();
   const feedback = student => {
     const query = 'SELECT f.id,f.body,f.created,f.reply,s.name FROM feedback f JOIN students s ON s.id=f.student';
@@ -24,8 +24,12 @@ export function classroom(db, owner, invite) {
     }
     const key = digest(authorization.match(/^Bearer ([a-zA-Z0-9_-]+)$/)?.[1] ?? '');
     const hashOwner = digest(owner);
+    const ownerDevice = authorization.match(/^OwnerDevice ([a-zA-Z0-9_-]{43})$/)?.[1];
+    const approvedDevice = typeof ownerDeviceHash === 'string' && /^[a-zA-Z0-9_-]{43}$/.test(ownerDeviceHash)
+      ? Buffer.from(ownerDeviceHash, 'base64url') : null;
+    const trustedDevice = ownerDevice && approvedDevice && timingSafeEqual(digest(ownerDevice), approvedDevice);
     const hashInvite = digest(invite);
-    if (timingSafeEqual(key, hashOwner)) {
+    if (trustedDevice || timingSafeEqual(key, hashOwner)) {
       switch (data.op) {
         case 'status': return {};
         case 'notices': return { notices: await notices() };
@@ -43,7 +47,8 @@ export function classroom(db, owner, invite) {
         default: fail(400, 'العملية غير متاحة.');
       }
     }
-    if (!timingSafeEqual(key, hashInvite)) fail(401, 'تحقّق من مفتاح الصف.');
+    const device = authorization.match(/^Device ([a-zA-Z0-9_-]{43})$/)?.[1];
+    if (!timingSafeEqual(key, hashInvite) && (!device || device !== data.device)) fail(401, 'تعذّر التحقق من اتصال الطالب.');
     if (!['sync','suggest'].includes(data.op)) fail(400, 'العملية غير متاحة.');
     const student = digest(identifier(data.device)).toString('hex');
     await db.prepare('INSERT OR IGNORE INTO students VALUES(?,?,?)').run(student, field(data.name, 100), Date.now());

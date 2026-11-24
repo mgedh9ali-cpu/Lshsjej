@@ -336,7 +336,7 @@ public final class MainActivity extends Activity {
         add(options,text(name,20,INK,true),0);
         section(options,"ملاحظاتي المحفوظة",w -> showLocalNotes(name,0));
         section(options,"الصف على شبكة الواي فاي",w -> openClassroom());
-        section(options,"تسجيل الخروج",w -> {localData().edit().putBoolean("remembered",false).apply();setup();});
+
     }
 
     private void openSources(String name, String subject) {
@@ -362,7 +362,7 @@ public final class MainActivity extends Activity {
             @Override public boolean shouldOverrideUrlLoading(WebView view,String url){ return true; }
             @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view,WebResourceRequest request) {
                 String file = request.getUrl().getLastPathSegment();
-                if (request.getUrl().toString().startsWith(ASSETS) && java.util.Arrays.asList("source.html","source.js","ocr-worker.js","core.js","models.js","room.css","cairo.woff2","thmanyahsans-Regular.woff2","thmanyahsans-Bold.woff2").contains(file)) {
+                if (request.getUrl().toString().startsWith(ASSETS) && java.util.Arrays.asList("source.html","source.js","room.css","cairo.woff2","thmanyahsans-Regular.woff2","thmanyahsans-Bold.woff2").contains(file)) {
                     try {
                         String mime=file.endsWith(".html")?"text/html":file.endsWith(".css")?"text/css":file.endsWith(".woff2")?"font/woff2":"application/javascript";
                         return new android.webkit.WebResourceResponse(mime,file.endsWith(".woff2")?null:"UTF-8",getAssets().open(file));

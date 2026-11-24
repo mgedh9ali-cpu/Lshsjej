@@ -42,8 +42,8 @@ async function offlineData(op,d){
     const tx=db.transaction('sources','readwrite'),store=tx.objectStore('sources'),q=store.index('subject').getAll(subject);
     const norm=t=>t.normalize('NFKC').replace(/[ً-ْـ]/g,'').trim().toLowerCase();
     await new Promise((resolve,reject)=>{
-      q.onsuccess=()=>{if(q.result.some(r=>norm(r.title)===norm(d.title)||norm(r.text)===norm(d.body))){tx.abort();return;}
-        store.add({subject,title:d.title,text:d.body,image:d.image,date:Date.now()});};
+      q.onsuccess=()=>{if(q.result.some(r=>norm(r.title)===norm(d.title)||(d.body&&r.text&&norm(r.text)===norm(d.body)))){tx.abort();return;}
+        store.add({subject,title:d.title,text:d.body||'',image:d.image,date:Date.now()});};
       tx.oncomplete=resolve;tx.onabort=()=>reject(Error(tx.error?'تعذّر الحفظ.':'المصدر موجود في المادة.'));tx.onerror=()=>reject(Error('تعذّر حفظ المصدر.'));
     });return {};
   }

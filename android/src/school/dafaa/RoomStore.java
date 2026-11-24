@@ -273,7 +273,8 @@ final class RoomStore {
         case "addSource":{
             rate("sources:"+name,30,600000);
             if(rows("SELECT id FROM subjects WHERE id=?",sub).length()==0)throw new Exception("المادة غير موجودة.");
-            String title=check(p,"title",180),body=check(p,"body",16000);
+            String title=check(p,"title",180),body=p.optString("body","").trim();
+            if(body.length()>16000)throw new Exception("النص طويل جدًا.");
             String topic=java.text.Normalizer.normalize(title,java.text.Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).replaceAll("[\\u064B-\\u065Fـ]","").replaceAll("[أإآ]","ا").replaceAll("^(شرح|ملخص|مراجعة)\\s+","").trim();
             if(rows("SELECT id FROM sources WHERE subject=? AND topic=?",sub,topic).length()>0)throw new Exception("هذا المصدر موجود مسبقًا.");
             String image=check(p,"image",550000);

@@ -53,7 +53,7 @@ public final class RoomActivity extends Activity {
             @Override public boolean shouldOverrideUrlLoading(WebView v,String url){return true;}
             @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){
                 Uri u=r.getUrl();String file=u.getLastPathSegment();
-                if(r.getUrl().toString().startsWith(base)&&Arrays.asList("library.js","room.html","room.css","room.js","ocr-worker.js","core.js","models.js","cairo.woff2","thmanyahsans-Regular.woff2","thmanyahsans-Bold.woff2").contains(file)){
+                if(r.getUrl().toString().startsWith(base)&&Arrays.asList("library.js","room.html","room.css","room.js","cairo.woff2","thmanyahsans-Regular.woff2","thmanyahsans-Bold.woff2").contains(file)){
                     try{return new WebResourceResponse(file.endsWith(".html")?"text/html":file.endsWith(".css")?"text/css":file.endsWith(".woff2")?"font/woff2":"application/javascript",file.endsWith(".woff2")?null:"UTF-8",getAssets().open(file));}catch(Exception ignored){}
                 }
                 return new WebResourceResponse("text/plain","UTF-8",new java.io.ByteArrayInputStream(new byte[0]));
@@ -84,9 +84,33 @@ public final class RoomActivity extends Activity {
 
     private boolean linked(){return !owner || !cloud().getString("key","").isEmpty();}
 
+    private String ownerDevice()throws Exception{
+        SharedPreferences config=cloud();
+        String device=config.getString("owner_device","");
+        if(device.isEmpty()){
+            device=RoomStore.random(32);
+            if(!config.edit().putString("owner_device",device).commit())throw new Exception("تعذّر حفظ اعتماد الهاتف.");
+        }
+        return device;
+    }
+
+    private String ownerEnrollmentCode()throws Exception{
+        byte[] digest=java.security.MessageDigest.getInstance("SHA-256")
+            .digest(ownerDevice().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return android.util.Base64.encodeToString(digest,android.util.Base64.URL_SAFE|android.util.Base64.NO_WRAP|android.util.Base64.NO_PADDING);
+    }
+
     private JSONObject cloudRequest(JSONObject payload)throws Exception{
         SharedPreferences config=cloud();
-        return CloudClass.call(config.getString("url",CloudClass.DEFAULT_ORIGIN),config.getString("key",""),payload);
+        String origin=config.getString("url",CloudClass.DEFAULT_ORIGIN);
+        String key=config.getString("key","");
+        if(owner){
+            try{return CloudClass.ownerDevice(origin,ownerDevice(),payload);}
+            catch(CloudClass.Unauthorized denied){
+                if(key.isEmpty())throw new Exception("هذا الهاتف بانتظار اعتماد لوحة المالك.");
+            }
+        }
+        return CloudClass.call(origin,key,payload);
     }
 
     private JSONObject studentRequest(String op,JSONObject data)throws Exception{
@@ -128,24 +152,6 @@ public final class RoomActivity extends Activity {
         runOnUiThread(()->{
             if(!isFinishing()&&!isDestroyed())web.evaluateJavascript("if(window.cloudUpdated)window.cloudUpdated()",null);
         });
-    }
-
-    private JSONObject configureCloud(JSONObject input)throws Exception{
-        String url=CloudClass.origin(input.optString("url"));
-        String key=input.optString("key").trim();
-        if(!key.matches("[a-zA-Z0-9_-]{24,128}"))throw new Exception("أدخل مفتاح الصف الذي شاركه المالك.");
-        SharedPreferences config=cloud();
-        boolean same=url.equals(config.getString("url",""))&&key.equals(config.getString("key",""));
-        if(!same&&pendingSuggestions().length()>0)throw new Exception("أرسل الاقتراحات المعلّقة قبل تغيير اتصال الصف.");
-        String device=same?config.getString("device",RoomStore.random(32)):RoomStore.random(32);
-        JSONObject request=owner?RoomStore.obj("op","status"):
-            RoomStore.obj("op","sync","device",device,"name",localData().getString("name",""));
-        JSONObject response=CloudClass.call(url,key,request);
-        SharedPreferences.Editor editor=config.edit().putString("url",url).putString("key",key).putString("device",device);
-        if(!owner)editor.putString("feedback",response.getJSONArray("entries").toString());
-        if(!editor.commit())throw new Exception("تعذّر حفظ اتصال الصف.");
-        if(!owner)updateStudentNotices(localData(),response.getJSONArray("notices"));
-        return new JSONObject();
     }
 
     private void synchronizeStudent(){
@@ -215,7 +221,7 @@ public final class RoomActivity extends Activity {
             JSONObject input;
             try{input=new JSONObject(raw);}catch(JSONException error){return;}
             String operation=input.optString("op");
-            if(operation.equals("configureCloud")||operation.startsWith("online")||
+            if(operation.equals("ownerEnrollment")||operation.startsWith("online")||
                     operation.equals("studentFeedback")||operation.equals("studentSuggest")){
                 syncExecutor.execute(()->{
                     try{
@@ -223,9 +229,9 @@ public final class RoomActivity extends Activity {
                             throw new Exception("سجّل الدخول لربط الصف.");
                         JSONObject result;
                         switch(operation){
-                            case "configureCloud":
+                            case "ownerEnrollment":
                                 if(!owner)throw new Exception("العملية للمالك.");
-                                result=configureCloud(input);break;
+                                result=RoomStore.obj("code",ownerEnrollmentCode());break;
                             case "studentFeedback":
                                 if(owner)throw new Exception("العملية للطالب.");
                                 if(input.optBoolean("refresh")){
@@ -262,7 +268,7 @@ public final class RoomActivity extends Activity {
                         SharedPreferences local=localData();
                         value=RoomStore.obj("owner",owner,"studentName",owner?"":local.getString("name",""),
                             "savedSession",owner&&!token.isEmpty(),"hasAccount",!owner&&local.contains("hash"),
-                            "cloudUrl",owner&&!linked()?"":cloud().getString("url",CloudClass.DEFAULT_ORIGIN),
+                            "cloudUrl",cloud().getString("url",CloudClass.DEFAULT_ORIGIN),
                             "locked",!owner&&!local.getBoolean("remembered",false),
                             "setup",owner&&((JSONObject)store.handle(true,"device",RoomStore.obj("op","status"))).optBoolean("setup"));
                     }else if(!owner&&op.equals("lock")){
