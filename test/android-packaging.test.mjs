@@ -13,8 +13,8 @@ test('ships separate student and owner launchers without the hosted web app', ()
     const source = read('android/' + manifest);
     assert.ok(source.includes('package="' + id + '"'));
     assert.ok(source.includes('android:name="' + activity + '"'));
-    assert.match(source, /android:versionCode="24"/);
-    assert.match(source, /android:versionName="0\.8\.1"/);
+    assert.match(source, /android:versionCode="25"/);
+    assert.match(source, /android:versionName="0\.8\.2"/);
     assert.match(source, /android:usesCleartextTraffic="false"/);
     assert.doesNotMatch(source, /android.intent.category.BROWSABLE/);
   }
@@ -102,6 +102,6 @@ test('the student inbox keeps received notices visible offline', async () => {
 });
 
 test('source images are published without text extraction', () => {
-  assert.match(read('android/room/room.js'), /rpc\('sharedPublish',\{subject:subject.name,title,\.\.\.attachment,requestId\}\)/);
+  assert.match(read('android/room/room.js'), /rpc\('sharedPublish',\{subject:subject.name,title,\.\.\.attachment,requestId\},/);
   assert.doesNotMatch(read('android/build.sh'), /prepare-ocr|offline\/\*/);
 });

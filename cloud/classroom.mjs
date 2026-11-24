@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const digest = text => createHash('sha256').update(text).digest();
 const fail = (status, message) => { throw Object.assign(Error(message), { status }); };
@@ -10,7 +10,7 @@ function identifier(value) {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{32,64}$/.test(value)) fail(400, 'معرّف العملية غير صالح.');
   return value;
 }
-export function classroom(db, owner, invite, initialize, limitSuggestion = async () => {}, ownerDeviceHash) {
+export function classroom(db, owner, invite, initialize, limitSuggestion = async () => {}, ownerDeviceHash, ownerPasswordHash) {
   const notices = () => db.prepare(`SELECT id,title,body,created FROM notices
     UNION ALL SELECT -id,added_by || ' نشر مصدرًا في ' || subject,title,created FROM shared_sources
     ORDER BY created DESC,id DESC LIMIT 100`).all();
@@ -99,9 +99,34 @@ export function classroom(db, owner, invite, initialize, limitSuggestion = async
       fail(400,'اختر إجابة صالحة.');
     return {correct:data.choice===quiz.answer,answer:quiz.answer};
   }
+  const ownerSessionSignature = claim => createHmac('sha256', owner)
+    .update('owner-session-v1:' + ownerPasswordHash + ':' + claim).digest();
+  function validOwnerSession(authorization) {
+    const match = authorization.match(/^OwnerSession (\d{13}\.[A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$/);
+    return Boolean(ownerPasswordHash && match && Number(match[1].split('.')[0]) > Date.now() &&
+      timingSafeEqual(ownerSessionSignature(match[1]), Buffer.from(match[2], 'base64url')));
+  }
+  async function ownerReport() {
+    const totals = await db.prepare(`SELECT
+      (SELECT count(*) FROM students) AS students,
+      (SELECT count(*) FROM shared_sources) AS sources,
+      (SELECT count(*) FROM notices) AS notices,
+      (SELECT count(*) FROM feedback WHERE reply IS NULL OR reply='') AS pending`).get();
+    const subjects = await db.prepare('SELECT subject,count(*) AS total FROM shared_sources GROUP BY subject ORDER BY total DESC,subject').all();
+    return {totals, subjects};
+  }
   return async (authorization, data) => {
     if (typeof owner !== 'string' || owner.length < 32 || typeof invite !== 'string' || invite.length < 24 || owner === invite) {
       fail(503, 'الربط عبر الإنترنت قيد الإعداد.');
+    }
+    if(data.op==='ownerlogin'){
+      if(typeof ownerPasswordHash!=='string'||!/^[a-f0-9]{64}$/.test(ownerPasswordHash))
+        fail(503,'دخول المالك عبر الإنترنت قيد الإعداد.');
+      const password=typeof data.password==='string'&&data.password.length<=128?data.password:'';
+      if(!timingSafeEqual(digest(password),Buffer.from(ownerPasswordHash,'hex')))
+        fail(401,'كلمة مرور المالك غير صحيحة.');
+      const claim=(Date.now()+30*86400000)+'.'+randomBytes(16).toString('base64url');
+      return {session:claim+'.'+ownerSessionSignature(claim).toString('base64url')};
     }
     const key = digest(authorization.match(/^Bearer ([a-zA-Z0-9_-]+)$/)?.[1] ?? '');
     const hashOwner = digest(owner);
@@ -110,10 +135,11 @@ export function classroom(db, owner, invite, initialize, limitSuggestion = async
       ? Buffer.from(ownerDeviceHash, 'base64url') : null;
     const trustedDevice = Boolean(device && approved && timingSafeEqual(digest(device), approved));
     const hashInvite = digest(invite);
-    if (trustedDevice || timingSafeEqual(key, hashOwner)) {
+    if (validOwnerSession(authorization) || (!ownerPasswordHash && trustedDevice) || timingSafeEqual(key, hashOwner)) {
       await initialize();
       switch (data.op) {
         case 'status': return {};
+        case 'report': return ownerReport();
         case 'sources': case 'source': return sharedSources(data, true, 'owner');
         case 'addsource': return addSource(data,'owner','المالك');
         case 'study': return studyList(data);

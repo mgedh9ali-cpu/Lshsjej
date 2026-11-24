@@ -40,7 +40,25 @@ final class CloudClass {
         return request(origin, "OwnerDevice " + device, payload);
     }
 
+    static JSONObject ownerSession(String origin, String session, JSONObject payload) throws Exception {
+        return request(origin, "OwnerSession " + session, payload);
+    }
+
+    static JSONObject ownerLogin(String origin, String password) throws Exception {
+        return request(origin, "", new JSONObject().put("op","ownerlogin").put("password",password));
+    }
+
+    interface Progress { void written(int bytes, int total); }
+
+    static JSONObject upload(String origin, String authorization, JSONObject payload, Progress progress)throws Exception{
+        return request(origin, authorization, payload, progress);
+    }
+
     private static JSONObject request(String origin, String authorization, JSONObject payload) throws Exception {
+        return request(origin, authorization, payload, null);
+    }
+
+    private static JSONObject request(String origin, String authorization, JSONObject payload, Progress progress) throws Exception {
         if (origin.isEmpty()) throw new Exception("اضبط اتصال الصف عبر الإنترنت من الإعدادات.");
         HttpsURLConnection connection = (HttpsURLConnection) new URL(origin + "/v1/classroom").openConnection();
         connection.setInstanceFollowRedirects(false);
@@ -53,7 +71,14 @@ final class CloudClass {
         byte[] request = payload.toString().getBytes(StandardCharsets.UTF_8);
         connection.setFixedLengthStreamingMode(request.length);
         try {
-            try (java.io.OutputStream output = connection.getOutputStream()) { output.write(request); }
+            try (java.io.OutputStream output = connection.getOutputStream()) {
+                if(progress==null)output.write(request);
+                else for(int offset=0;offset<request.length;){
+                    int size=Math.min(65536,request.length-offset);
+                    output.write(request,offset,size);offset+=size;
+                    progress.written(offset,request.length);
+                }
+            }
             int status = connection.getResponseCode();
             if (status >= 300 && status < 400) throw new Exception("عنوان خادم الصف يعيد التوجيه. تحقق من الرابط.");
             try (InputStream input = status == 200 ? connection.getInputStream() : connection.getErrorStream()) {

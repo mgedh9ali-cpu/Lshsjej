@@ -85,36 +85,31 @@ public final class RoomActivity extends Activity {
 
     private boolean linked(){return !owner || !cloud().getString("key","").isEmpty();}
 
-    private String ownerDevice()throws Exception{
-        SharedPreferences config=cloud();
-        String device=config.getString("owner_device","");
-        if(device.isEmpty()){
-            device=RoomStore.random(32);
-            if(!config.edit().putString("owner_device",device).commit())throw new Exception("تعذّر حفظ اعتماد الهاتف.");
-        }
-        return device;
-    }
-
-    private String ownerEnrollmentCode()throws Exception{
-        byte[] digest=java.security.MessageDigest.getInstance("SHA-256")
-            .digest(ownerDevice().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        return android.util.Base64.encodeToString(digest,android.util.Base64.URL_SAFE|android.util.Base64.NO_WRAP|android.util.Base64.NO_PADDING);
-    }
-
     private JSONObject cloudRequest(JSONObject payload)throws Exception{
+        return cloudRequest(payload,null);
+    }
+
+    private JSONObject cloudRequest(JSONObject payload,CloudClass.Progress progress)throws Exception{
         SharedPreferences config=cloud();
-        String origin=config.getString("url",CloudClass.DEFAULT_ORIGIN);
-        String key=config.getString("key","");
-        if(owner){
-            try{return CloudClass.ownerDevice(origin,ownerDevice(),payload);}
-            catch(CloudClass.Unauthorized denied){
-                if(key.isEmpty())throw new Exception("هذا الهاتف بانتظار اعتماد لوحة المالك.");
+        String origin=owner?CloudClass.DEFAULT_ORIGIN:config.getString("url",CloudClass.DEFAULT_ORIGIN);
+        if(!owner)return CloudClass.call(origin,config.getString("key",""),payload);
+        String session=config.getString("owner_session","");
+        if(!session.isEmpty()){
+            try{
+                return progress==null?CloudClass.ownerSession(origin,session,payload):
+                    CloudClass.upload(origin,"OwnerSession "+session,payload,progress);
+            }catch(CloudClass.Unauthorized denied){
+                config.edit().remove("owner_session").apply();
             }
         }
-        return CloudClass.call(origin,key,payload);
+        throw new Exception("افتح الإعدادات وسجّل الدخول إلى حساب المالك.");
     }
 
     private JSONObject studentRequest(String op,JSONObject data)throws Exception{
+        return studentRequest(op,data,null);
+    }
+
+    private JSONObject studentRequest(String op,JSONObject data,CloudClass.Progress progress)throws Exception{
         SharedPreferences config=cloud();
         String device=config.getString("device","");
         if(device.isEmpty()){
@@ -126,7 +121,8 @@ public final class RoomActivity extends Activity {
         if(!savedUrl.isEmpty()&&!savedUrl.equals(CloudClass.DEFAULT_ORIGIN)){
             return cloudRequest(request);
         }
-        return CloudClass.student(device,request);
+        return progress==null?CloudClass.student(device,request):
+            CloudClass.upload(CloudClass.DEFAULT_ORIGIN,"Device "+device,request,progress);
     }
 
     private JSONArray pendingSuggestions()throws JSONException{
@@ -228,7 +224,7 @@ public final class RoomActivity extends Activity {
             JSONObject input;
             try{input=new JSONObject(raw);}catch(JSONException error){return;}
             String operation=input.optString("op");
-            if(operation.equals("ownerEnrollment")||operation.startsWith("online")||operation.startsWith("shared")||
+            if(operation.equals("ownerCloudLogin")||operation.startsWith("online")||operation.startsWith("shared")||
                     operation.equals("studentFeedback")||operation.equals("studentSuggest")){
                 syncExecutor.execute(()->{
                     try{
@@ -254,15 +250,21 @@ public final class RoomActivity extends Activity {
                                     case "sharedSolve": actionName="solve";break;
                                     default: actionName="source";
                                 }
-                                result=owner?cloudRequest(input.put("op",actionName)):studentRequest(actionName,input);
+                                CloudClass.Progress progress=operation.equals("sharedPublish")?(bytes,total)->runOnUiThread(()->{
+                                    if(!isDestroyed())web.evaluateJavascript("window.uploadProgress("+id+","+bytes+","+total+")",null);
+                                }):null;
+                                result=owner?cloudRequest(input.put("op",actionName),progress):studentRequest(actionName,input,progress);
                                 if(operation.equals("sharedDownload")){
                                     prepareSourceDownload(result.getJSONObject("entry"));
                                     result=RoomStore.obj();
                                 }
                                 break;
-                            case "ownerEnrollment":
+                            case "ownerCloudLogin":
                                 if(!owner)throw new Exception("العملية للمالك.");
-                                result=RoomStore.obj("code",ownerEnrollmentCode());break;
+                                String session=CloudClass.ownerLogin(CloudClass.DEFAULT_ORIGIN,RoomStore.check(input,"password",128)).getString("session");
+                                if(!cloud().edit().putString("owner_session",session).commit())
+                                    throw new Exception("تعذّر حفظ جلسة المالك.");
+                                result=RoomStore.obj();break;
                             case "studentFeedback":
                                 if(owner)throw new Exception("العملية للطالب.");
                                 if(input.optBoolean("refresh")){
@@ -363,7 +365,7 @@ public final class RoomActivity extends Activity {
                         if(op.equals("login")||op.equals("setup")){
                             token=((JSONObject)value).getString("token");
                             getPreferences(MODE_PRIVATE).edit().putString(owner?"ownerToken":"studentToken",token).putString(owner?"ownerName":"studentName",((JSONObject)value).getString("name")).apply();((JSONObject)value).remove("token");
-                        }else if(op.equals("logout")){
+                        }else if(op.equals("logout")){cloud().edit().remove("owner_session").apply();
                             token="";
                             getPreferences(MODE_PRIVATE).edit().remove(owner?"ownerToken":"studentToken").remove(owner?"ownerName":"studentName").apply();
                         }

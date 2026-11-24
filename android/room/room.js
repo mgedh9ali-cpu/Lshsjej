@@ -3,11 +3,12 @@ const $=sel=>document.querySelector(sel);
 const main=$('main'), bottomNav=$('#bottom-nav'), pending=new Map();
 let serial=0,revision=0,page='login',name='',owner=false,setup=false,cache,selected,hideTimer;
 let offline=false,hasAccount=false,locked=false,previewUrl=null,cloudUrl='';
-function rpc(op,data={}){
+function rpc(op,data={},progress){
   if(offline && ['home','subject','source','addSource'].includes(op))return offlineData(op,data);
   const id=++serial;
-  return new Promise((resolve,reject)=>{pending.set(id,{resolve,reject});Classroom.request(id,JSON.stringify({...data,op}));});
+  return new Promise((resolve,reject)=>{pending.set(id,{resolve,reject,progress});Classroom.request(id,JSON.stringify({...data,op}));});
 }
+window.uploadProgress=(id,bytes,total)=>pending.get(id)?.progress?.(bytes,total);
 window.complete=(id,raw)=>{
   const call=pending.get(id);if(!call)return;pending.delete(id);
   const result=JSON.parse(raw);
@@ -79,7 +80,7 @@ function navigation(){
       return entry;
     }));
   }
-  const active=['subject','source','quiz','newSource'].includes(page)?'home':page==='notes'?'settings':page;
+  const active=['subject','source','quiz','newSource','sharedAll','reports'].includes(page)?'home':page;
   for(const entry of bottomNav.children){
     if(entry.dataset.page===active)entry.setAttribute('aria-current','page');
     else entry.removeAttribute('aria-current');
@@ -113,9 +114,9 @@ async function go(next,item,focusPage=false){
   page=next;const mine=++revision;
   if(item&&(next==='subject'||next==='newSource'))selected=item;
   navigation();
-  const pages={unlock,login,home,feed,feedback,accounts,settings,notes,subject,newSource,source,quiz,sharedAll};
+  const pages={unlock,login,home,feed,feedback,accounts,settings,subject,newSource,source,quiz,sharedAll,reports};
   try{
-    if((name||offline)&&['home','feed','feedback','accounts','settings','subject'].includes(next))cache=await rpc('home');
+    if((name||offline)&&['home','feed','feedback','accounts','subject'].includes(next))cache=await rpc('home');
     if(mine!==revision)return;
     const nodes=await pages[next](item);
     if(mine===revision){
@@ -131,7 +132,7 @@ async function go(next,item,focusPage=false){
   }catch(err){
     if(mine!==revision)return;
     if(err.message.includes('انتهت الجلسة')){name='';await go(owner?'login':'unlock');return;}
-    main.replaceChildren(hero('تعذّر فتح الصفحة',err.message),button('إعادة المحاولة',()=>go(next,item)),button('العودة',()=>go(owner&&!name?'login':!owner&&locked?'unlock':'home')));
+    main.replaceChildren(hero('تعذّر فتح الصفحة',err.message),button('إعادة المحاولة',()=>go(next,item)),...(owner&&err.message.includes('حساب المالك')?[button('دخول المالك',()=>go('settings'),'primary')]:[]),button('العودة',()=>go(owner&&!name?'login':!owner&&locked?'unlock':'home')));
   }
 }
 function login(){
@@ -178,7 +179,7 @@ async function home(){
   const waiting=cache.feedback.filter(x=>!x.reply).length;
   return [hero(owner?'نظرة على الصف':'المواد الدراسية',owner?name:(name||'مكتبة الدروس')),
     owner&&wrap('grid stat-grid',tile('تسجيلات الطلاب','عرض المسجلين','◉',()=>go('accounts')),tile('صندوق الاقتراحات',number.format(waiting)+' بانتظار الرد','✉',()=>go('feedback')),tile('إشعار جديد','إرسال إلى الصف','＋',()=>go('feed'))),
-    owner&&button('منشورات الطلاب',()=>go('sharedAll'), 'primary'),owner&&el('h2','المواد الدراسية','section-title'),search,grid,owner&&form('مادة جديدة',[field('اسم المادة','name')],'إضافة مادة',async d=>{await rpc('onlineAddSubject',d);await rpc('addSubject',d);await go('home');})];
+    owner&&wrap('row',button('منشورات الطلاب',()=>go('sharedAll'),'primary'),button('تقارير الصف',()=>go('reports'))),owner&&el('h2','المواد الدراسية','section-title'),search,grid,owner&&form('مادة جديدة',[field('اسم المادة','name')],'إضافة مادة',async d=>{await rpc('onlineAddSubject',d);await rpc('addSubject',d);await go('home');})];
 }
 function noticeCards(notices){
   return notices.map(n=>wrap('card',el('small',date(n.created)),el('h3',n.title),el('pre',n.body)));
@@ -306,61 +307,46 @@ async function accounts(){
 function connectionPrompt(){
   return button('ربط الصف عبر الإنترنت',()=>go('settings'));
 }
-async function notes(){
-  const picker=el('select');
-  picker.setAttribute('aria-label','المادة');
-  readings.forEach(([subject],index)=>{
-    const option=el('option',subject);option.value=String(index);picker.append(option);
-  });
-  const entry=field('ملاحظتك','text','textarea');
-  const input=entry.querySelector('textarea');
-  input.rows=8;input.maxLength=16000;input.required=false;
-  await load();
-  async function load(){
-    const index=picker.value;
-    input.disabled=true;
-    try{
-      const data=await rpc('getNote',{index:Number(index)});
-      if(index===picker.value)input.value=data.text;
-    }finally{if(index===picker.value)input.disabled=false;}
-  }
-  picker.onchange=()=>load().catch(error=>message(error.message));
-  return [hero('ملاحظاتي','محفوظة على هاتفك'),form('',[wrap('field',el('span','المادة'),picker),entry],
-    'حفظ الملاحظة',async(data,status)=>{
-      if(input.disabled)return;
-      await rpc('saveNote',{index:Number(picker.value),text:data.text});
-      status.textContent='حُفظت الملاحظة على هذا الهاتف.';
-    })];
+function applyTheme(theme){
+  document.documentElement.dataset.theme=theme;
 }
+applyTheme(localStorage.getItem('qum-theme')||'system');
 function settings(){
-  const enrollment=owner?wrap('card',el('h2','اتصال لوحة المالك')):null;
-  if(enrollment){
-    const status=el('p','جارٍ التحقق من الاتصال…');
-    enrollment.append(status);
-    rpc('onlineStatus').then(()=>{status.textContent='متصل بالصف عبر الإنترنت.';}).catch(async error=>{
+  const theme=el('select');
+  theme.setAttribute('aria-label','المظهر');
+  for(const [key,label] of [['system','حسب الجهاز'],['light','فاتح'],['dark','داكن']]){
+    const option=el('option',label);option.value=key;theme.append(option);
+  }
+  theme.value=localStorage.getItem('qum-theme')||'system';
+  theme.onchange=()=>{localStorage.setItem('qum-theme',theme.value);applyTheme(theme.value);};
+  const appearance=wrap('card',el('h2','المظهر'),wrap('field',el('span','ألوان التطبيق'),theme));
+  const connection=owner?wrap('card',el('h2','حساب المالك عبر الإنترنت')):null;
+  if(connection){
+    const status=el('p','جارٍ فحص الاتصال…');
+    connection.append(status);
+    const login=form('',[field('كلمة المرور الرئيسية','password','password')],'تسجيل الدخول',async data=>{
+      await rpc('ownerCloudLogin',data);
+      message('تم تسجيل الدخول إلى الصف.');
+      await go('settings');
+    });
+    login.querySelector('input').autocomplete='current-password';
+    rpc('onlineStatus').then(()=>{status.textContent='متصل بالصف عبر الإنترنت.';}).catch(error=>{
       status.textContent=error.message;
-      if(!error.message.includes('بانتظار اعتماد'))return;
-      try{
-        const {code}=await rpc('ownerEnrollment');
-        const label=field('رمز اعتماد هذا الهاتف','device','text',code);
-        label.querySelector('input').readOnly=true;
-        enrollment.append(label);
-      }catch(err){status.textContent=err.message;}
+      connection.append(login);
     });
   }
-  return [hero('الإعدادات',name||'قوم دروس'),enrollment,
-    offline&&button('ملاحظاتي',()=>go('notes')),
-    owner&&wrap('card',el('h2','النسخ الاحتياطي المشفّر'),
-      el('p','احفظ نسخة من بيانات هذه اللوحة على الهاتف. لبيانات الصف عبر الإنترنت نسخة احتياطية تُؤخذ من الخادم.'),
-      form('حفظ نسخة احتياطية',[field('كلمة مرور للنسخة · ١٢ حرفًا على الأقل','password','password')],'اختيار مكان الحفظ',async d=>{
-        await rpc('backup',{password:d.password});message('اختر مكان حفظ ملف النسخة المشفّرة.');
-      }),
-      form('استعادة نسخة احتياطية',[field('كلمة مرور النسخة السابقة','password','password')],'اختيار ملف للاستعادة',async d=>{
-        if(!confirm('سيُستبدل محتوى لوحة المالك بالبيانات الموجودة في النسخة. هل تريد المتابعة؟'))return;
-        await rpc('restore',{password:d.password});message('اختر ملف النسخة لاستعادة البيانات.');
-      })
-    ),
-    !offline&&button('تسجيل الخروج',async()=>{await rpc('logout');name='';await go('login');})];
+  return [hero('الإعدادات',''),appearance,connection,
+    owner&&button('تسجيل الخروج',async()=>{await rpc('logout');name='';await go('login');})];
+}
+async function reports(){
+  if(!owner)return [];
+  const {totals,subjects}=await rpc('onlineReport');
+  const counts=wrap('grid',...[
+    ['الطلاب',totals.students],['المصادر',totals.sources],['الإشعارات المنشورة',totals.notices],['اقتراحات بانتظار الرد',totals.pending]
+  ].map(([label,count])=>wrap('card',el('small',label),el('strong',number.format(count)))));
+  return [hero('تقارير الصف',''),counts,
+    wrap('card',el('h2','المصادر حسب المادة'),...(subjects.length?subjects.map(({subject,total})=>
+      wrap('row',el('span',subject),el('strong',number.format(total)))):[el('p','لا توجد مصادر منشورة بعد.','empty-state')]))];
 }
 async function prepareSourceImage(file){
   if(!file.size||file.size>15000000)throw Error('اختر صورة حتى ١٥ ميغابايت.');
@@ -395,10 +381,14 @@ function sourceForm(subject){
   const title=field('عنوان المصدر','title');
   title.querySelector('input').maxLength=180;
   let previousPayload='',requestId='';
-  return form('',[title,upload],'نشر في '+subject.name,async data=>{
+  const progress=el('progress');
+  progress.max=100;progress.hidden=true;progress.setAttribute('aria-label','رفع المصدر');
+  return form('',[title,upload,progress],'نشر في '+subject.name,async (data,status)=>{
     const title=data.title.trim(), selectedFile=data.file;
     if(!title)throw Error('اكتب عنوان المصدر.');
     if(!selectedFile.size)throw Error('اختر صورة أو ملفًا.');
+    progress.hidden=true;
+    status.textContent='جارٍ تجهيز الملف…';
     let attachment;
     if(['image/jpeg','image/png','image/webp'].includes(selectedFile.type)){
       attachment={image:await prepareSourceImage(selectedFile)};
@@ -408,8 +398,15 @@ function sourceForm(subject){
     }
     const payload=JSON.stringify({title,...attachment});
     if(previousPayload!==payload){previousPayload=payload;requestId=crypto.randomUUID();}
-    await rpc('sharedPublish',{subject:subject.name,title,...attachment,requestId});
-    message('نُشر المصدر في '+subject.name+'.');
+    progress.value=0;progress.hidden=false;
+    status.textContent='بدأ رفع الملف…';
+    try{
+      await rpc('sharedPublish',{subject:subject.name,title,...attachment,requestId},(bytes,total)=>{
+        progress.value=Math.floor(100*bytes/total);
+        status.textContent=bytes===total?'اكتمل رفع الملف، بانتظار تأكيد النشر…':'جارٍ رفع الملف · '+number.format(progress.value)+'٪';
+      });
+    }catch(error){progress.hidden=true;throw error;}
+    message('تم نشر «'+title+'» في '+subject.name+'.');
     await go('subject',subject);
   });
 }
@@ -559,5 +556,5 @@ async function source(item){const record=await rpc('source',{id:item.id});const 
   return [button('العودة للمادة',()=>go('subject',selected)),hero(record.title,date(record.created)+(owner&&record.added_by?' · أضافه '+record.added_by:'')),wrap('card',...(record.body?[el('pre',record.body)]:[]),img),owner&&button('حذف المصدر',async()=>{if(confirm('حذف هذا المصدر من الصف؟')){await rpc('remove',{id:item.id});await go('subject',selected);}})];}
 async function quiz(item){const q=await rpc('quiz',{id:item.id}),choices=JSON.parse(q.choices),result=el('p');
   return [hero(q.title,selected.name),wrap('card',el('h3',q.question),...choices.map((v,i)=>button(v,async()=>{if(owner){message('معاينة المالك');return;}const score=await rpc('solve',{id:item.id,choice:i});result.textContent=i===score.answer?'إجابة صحيحة':'الإجابة الصحيحة · '+choices[score.answer];})),result),button('العودة للمادة',()=>go('subject',selected))];}
-window.backPage=()=>{if(page==='source'||page==='quiz'||page==='newSource'){go('subject',selected);return true;}if(page==='notes'){go('settings');return true;}if(!owner&&locked)return false;if((name||offline)&&page!=='home'){go('home');return true;}return false;};
+window.backPage=()=>{if(page==='source'||page==='quiz'||page==='newSource'){go('subject',selected);return true;}if(!owner&&locked)return false;if((name||offline)&&page!=='home'){go('home');return true;}return false;};
 boot().catch(e=>message(e.message));
