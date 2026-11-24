@@ -55,6 +55,9 @@ test('the Worker accepts the existing Android requests and isolates student repl
   const synced = await learner({ op: 'sync', name: 'طالب', device });
   assert.equal(synced.entries[0].reply, 'تمّ.');
   assert.deepEqual((await learner({ op: 'sync', name: 'طالب آخر', device: secret() })).entries, []);
+  await owner({op:'publish',title:'درس جديد',body:'راجِعوا المادة.'});
+  const notices = await learner({op:'sync',name:'طالب',device});
+  assert.equal(notices.notices[0].title, 'درس جديد');
   const publishingDevice = randomBytes(32).toString('base64url');
   const ownerDevice = randomBytes(32).toString('base64url');
   env.QUM_OWNER_DEVICE_HASH = createHash('sha256').update(ownerDevice).digest('base64url');
