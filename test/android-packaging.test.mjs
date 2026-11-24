@@ -17,8 +17,8 @@ test('ships separate student and owner launchers without the hosted web app', ()
     const source = read('android/' + manifest);
     assert.ok(source.includes('package="' + id + '"'));
     assert.ok(source.includes('android:name="' + activity + '"'));
-    assert.match(source, /android:versionCode="17"/);
-    assert.match(source, /android:versionName="0\.7\.4"/);
+    assert.match(source, /android:versionCode="19"/);
+    assert.match(source, /android:versionName="0\.7\.6"/);
     assert.match(source, /android:usesCleartextTraffic="false"/);
     assert.doesNotMatch(source, /android.intent.category.BROWSABLE/);
   }
@@ -29,16 +29,15 @@ test('ships separate student and owner launchers without the hosted web app', ()
   assert.doesNotMatch(read('android/src/school/dafaa/MainActivity.java'), /openStudentApp|httpsOrigin/);
 });
 
-test('student registration is local and only the registration notice is sent to the owner', () => {
-  const interfaceCode = read('android/room/room.js');
-  assert.doesNotMatch(interfaceCode, /go\('pair'\)|رمز الربط|مشاركة الرمز/);
-  assert.match(interfaceCode, /rpc\(hasAccount\?'unlock':'register',data\)/);
-  assert.match(interfaceCode, /تم التسجيل · /);
-  const registration = read('android/src/school/dafaa/LocalRegistration.java');
-  assert.match(registration, /RoomStore\.obj\("op", "registerLocal", "id", id, "name", name\)/);
-  assert.doesNotMatch(registration, /password|verifier|salt/);
-  assert.match(registration, /RoomStore\.obj\("op", "localNotices", "id", id\)/);
-  assert.match(read('android/src/school/dafaa/RoomStore.java'), /SELECT id,title,body,created FROM posts ORDER BY id DESC/);
+test('the student password stays local and classroom traffic uses HTTPS', () => {
+  const script = read('android/room/room.js');
+  assert.match(script, /rpc\(hasAccount\?'unlock':'register',data\)/);
+  assert.doesNotMatch(script, /شبكة الواي فاي/);
+  const bridge = read('android/src/school/dafaa/RoomActivity.java');
+  assert.match(bridge, /put\("device",device\)\.put\("name",localData\(\)\.getString\("name",""\)\)/);
+  assert.match(bridge, /note_\s*"\+index/);
+  assert.match(bridge, /putString\("outbox",queue\.toString\(\)\)\.commit\(\)/);
+  assert.match(read('android/src/school/dafaa/CloudClass.java'), /HttpsURLConnection/);
 });
 
 test('the bottom bar opens role-specific pages and keeps Materials selected inside a lesson', () => {
@@ -85,7 +84,7 @@ test('the bottom bar opens role-specific pages and keeps Materials selected insi
 test('the student inbox keeps received notices visible offline', async () => {
   const script = read('android/room/room.js');
   const start = script.indexOf('function noticeCards(');
-  const end = script.indexOf('function feed()', start);
+  const end = script.indexOf('async function feed()', start);
   const list = { isConnected: true, replaceChildren(...children) { this.children = children; } };
   const notice = { created: 0, title: 'موعد الدرس', body: 'الدرس غدًا' };
   const requests = [];

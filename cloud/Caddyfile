@@ -1,0 +1,6 @@
+{$QUM_DOMAIN} {
+    handle /v1/classroom {
+        reverse_proxy classroom:8080
+    }
+    respond 404
+}
