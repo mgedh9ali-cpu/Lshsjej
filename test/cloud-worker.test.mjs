@@ -70,9 +70,16 @@ test('the Worker accepts the existing Android requests and isolates student repl
   assert.equal(sources[0].added_by, 'طالبة');
   const peer = randomBytes(32).toString('base64url');
   const peerData = {device:peer,name:'طالب آخر'};
-  const listing = await send('Device ' + peer, {...peerData,op:'sources',subject:'الفيزياء'});
-  assert.equal(listing.entries[0].id, sources[0].id);
-  assert.equal((await send('Device ' + peer, {...peerData,op:'source',id:sources[0].id})).entry.image, publication.image);
+  const anotherPeer = randomBytes(32).toString('base64url');
+  for (const [device,name] of [[publishingDevice,'طالبة'],[peer,'طالب آخر'],[anotherPeer,'طالب جديد']]) {
+    const auth = 'Device ' + device;
+    const listing = await send(auth, {device,name,op:'sources',subject:'الفيزياء'});
+    assert.deepEqual(listing.entries, sources);
+    const photo = await send(auth, {device,name,op:'source',id:sources[0].id});
+    assert.equal(photo.entry.image, publication.image);
+    const chemistry = await send(auth, {device,name,op:'sources',subject:'الكيمياء'});
+    assert.deepEqual(chemistry.entries, []);
+  }
   await send('Device ' + peer, {...peerData,op:'removesource',id:sources[0].id}, 400);
   await send('OwnerDevice ' + ownerDevice, {op:'removesource',id:sources[0].id});
   await send('Device ' + peer, {...peerData,op:'source',id:sources[0].id}, 404);

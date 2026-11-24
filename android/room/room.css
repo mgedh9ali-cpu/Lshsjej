@@ -367,3 +367,6 @@ main > .hero { animation: page-in var(--motion) both; }
   main > .hero { animation: none; }
   .bottom-tab-label { transition: none; }
 }
+
+.source-photo { margin-top: 8px; min-height: 6rem; }
+.source-photo img { margin-inline: auto; }

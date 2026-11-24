@@ -105,7 +105,10 @@ async function boot(){
   }else if(!owner)name=state.studentName||'';
   await go(locked&&!owner?'unlock':owner&&!name?'login':'home');
 }
+let sourceImageObserver;
 async function go(next,item,focusPage=false){
+  sourceImageObserver?.disconnect();
+  sourceImageObserver=undefined;
   if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
   page=next;const mine=++revision;
   if(item&&(next==='subject'||next==='newSource'))selected=item;
@@ -377,7 +380,7 @@ function sourceForm(subject){
   const title=field('عنوان المصدر','title');
   title.querySelector('input').maxLength=180;
   let previousFile='',previousTitle='',requestId='';
-  return form('',[title,upload],owner?'حفظ المصدر':'نشر لجميع الطلاب',async data=>{
+  return form('',[title,upload],owner?'حفظ المصدر':'نشر في '+subject.name,async data=>{
     const title=data.title.trim();
     if(!title)throw Error('اكتب عنوان المصدر.');
     const image=await prepareSourceImage(data.file);
@@ -390,6 +393,7 @@ function sourceForm(subject){
       }
       await rpc('sharedPublish',{subject:subject.name,title,image,requestId});
     }
+    if(!owner)message('نُشر المصدر في '+subject.name+'.');
     await go('subject',subject);
   });
 }
@@ -398,40 +402,56 @@ function sharedFeed(subject){
   const status=el('p','','empty-state');
   const controls=wrap('row');
   let loading=false,entries=[],next=null;
+  const observer=new IntersectionObserver(visible=>{
+    for(const entry of visible){
+      if(!entry.isIntersecting)continue;
+      observer.unobserve(entry.target);
+      entry.target.loadSourceImage();
+    }
+  },{rootMargin:'100px'});
+  sourceImageObserver=observer;
   function card(entry){
     const image=el('img');
     image.alt=entry.title;
-    const details=el('details');
-    details.append(el('summary','عرض الصورة'));
-    details.ontoggle=async()=>{
-      if(!details.open||image.hasAttribute('src')||details.dataset.loading)return;
-      details.dataset.loading='true';
-      const notice=el('p','جارٍ تحميل الصورة…');
-      details.append(notice);
+    image.decoding='async';
+    const photo=wrap('source-photo');
+    const status=el('p','جارٍ تحميل الصورة…','empty-state');
+    photo.append(status);
+    photo.loadSourceImage=async()=>{
+      photo.replaceChildren(status);
       try{
         const {entry:record}=await rpc('sharedImage',{id:entry.id});
         image.src=record.image;
-        details.append(image);
-        notice.remove();
-      }catch(err){notice.textContent=err.message;}
-      finally{delete details.dataset.loading;}
+        photo.replaceChildren(image);
+      }catch(err){
+        photo.replaceChildren(el('p',err.message,'empty-state'),button('إعادة تحميل الصورة',photo.loadSourceImage));
+      }
     };
-    if(owner)details.append(button('حذف المنشور',async()=>{
-      if(!confirm('حذف هذا المصدر من جميع أجهزة الصف؟'))return;
-      await rpc('onlineRemoveSource',{id:entry.id});
-      await load();
-    }));
-    return wrap('card',el('strong',entry.title),el('small',entry.added_by+' · '+entry.subject+' · '+dateTime(entry.created)),details);
+    observer.observe(photo);
+    const metadata=[entry.added_by,subject?null:entry.subject,dateTime(entry.created)].filter(Boolean).join(' · ');
+    const post=wrap('card',el('strong',entry.title),el('small',metadata),photo);
+    if(owner)post.append(button('حذف المنشور',async()=>{
+        if(!confirm('حذف هذا المصدر من جميع أجهزة الصف؟'))return;
+        await rpc('onlineRemoveSource',{id:entry.id});
+        await load();
+      }));
+    return post;
   }
   async function load(cursor=null,append=false){
     if(loading)return;
     loading=true;
     try{
       const data=await rpc('sharedList',{subject,before:cursor});
-      if(append)entries.push(...data.entries);
-      else entries=data.entries;
+      if(!section.isConnected)return;
+      if(append){
+        entries.push(...data.entries);
+        list.append(...data.entries.map(card));
+      }else{
+        observer.disconnect();
+        entries=data.entries;
+        list.replaceChildren(...entries.map(card));
+      }
       next=data.next;
-      list.replaceChildren(...entries.map(card));
       status.textContent=entries.length?'':'لا توجد منشورات بعد.';
       controls.replaceChildren(refresh,...(next?[more]:[]));
     }catch(err){status.textContent=err.message;}
