@@ -62,20 +62,20 @@ jobs:
       - name: Build Android student application
         run: |
           mkdir -p dist
-          bash android/build.sh dist/QumDorous-Student-0.8.3.apk student
+          bash android/build.sh dist/QumDorous-Student-0.8.4.apk student
       - name: Build Android owner application
-        run: bash android/build.sh dist/QumDorous-Owner-0.8.3.apk owner
+        run: bash android/build.sh dist/QumDorous-Owner-0.8.4.apk owner
       - name: Verify Android packages
         run: |
           build_tools="$ANDROID_SDK_ROOT/build-tools/35.0.0"
           for edition in Student Owner; do
-            apk="dist/QumDorous-$edition-0.8.3.apk"
+            apk="dist/QumDorous-$edition-0.8.4.apk"
             "$build_tools/apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/$edition-signature.txt"
             grep -Fix 'Signer #1 certificate SHA-256 digest: 4800bdbc6d0164f45bae53daf6e60d2034634832c958c8cc43ca8136f07ee8fb' "$RUNNER_TEMP/$edition-signature.txt"
             package=school.dafaa
             [[ "$edition" != Owner ]] || package=school.dafaa.owner
             "$build_tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/apk-badging.txt"
-            grep -F "package: name='$package' versionCode='26' versionName='0.8.3'" "$RUNNER_TEMP/apk-badging.txt"
+            grep -F "package: name='$package' versionCode='27' versionName='0.8.4'" "$RUNNER_TEMP/apk-badging.txt"
             unzip -Z1 "$apk" > "$RUNNER_TEMP/apk-files.txt"
             for asset in room.html room.js room.css cairo.woff2; do
               grep -Fx "assets/$asset" "$RUNNER_TEMP/apk-files.txt"
@@ -86,6 +86,6 @@ jobs:
       - name: Save both APKs as build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: QumDorous-Android-0.8.3-release
+          name: QumDorous-Android-0.8.4-release
           path: dist/
           if-no-files-found: error

@@ -135,9 +135,11 @@ export function classroom(db, owner, invite, initialize, limitSuggestion = async
           await db.prepare('INSERT INTO notices(title,body,created) VALUES(?,?,?)').run(field(data.title, 180), field(data.body, 12000), Date.now());
           return {};
         case 'feedback': return { entries: await feedback() };
-        case 'reply':
-          if (!(await db.prepare('UPDATE feedback SET reply=? WHERE id=?').run(field(data.body, 2000), identifier(data.id))).changes) fail(404, 'الاقتراح غير موجود.');
-          return {};
+        case 'reply': {
+          const id=identifier(data.id), reply=field(data.body,2000);
+          if (!(await db.prepare('UPDATE feedback SET reply=? WHERE id=?').run(reply,id)).changes) fail(404, 'الاقتراح غير موجود.');
+          return {id,reply};
+        }
         case 'registrations': {
           const entries = await db.prepare('SELECT name,created FROM students ORDER BY created DESC LIMIT 200').all();
           return { entries, total: (await db.prepare('SELECT count(*) AS total FROM students').get()).total };

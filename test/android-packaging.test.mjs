@@ -13,8 +13,8 @@ test('ships separate student and owner launchers without the hosted web app', ()
     const source = read('android/' + manifest);
     assert.ok(source.includes('package="' + id + '"'));
     assert.ok(source.includes('android:name="' + activity + '"'));
-    assert.match(source, /android:versionCode="26"/);
-    assert.match(source, /android:versionName="0\.8\.3"/);
+    assert.match(source, /android:versionCode="27"/);
+    assert.match(source, /android:versionName="0\.8\.4"/);
     assert.match(source, /android:usesCleartextTraffic="false"/);
     assert.doesNotMatch(source, /android.intent.category.BROWSABLE/);
   }
@@ -79,26 +79,32 @@ test('the bottom bar opens role-specific pages and keeps Materials selected insi
 
 test('the student inbox keeps received notices visible offline', async () => {
   const script = read('android/room/room.js');
-  const start = script.indexOf('function noticeCards(');
+  const start = script.indexOf('let noticeFilter=');
   const end = script.indexOf('async function feed()', start);
   const list = { isConnected: true, replaceChildren(...children) { this.children = children; } };
-  const notice = { created: 0, title: 'موعد الدرس', body: 'الدرس غدًا' };
+  const notice = { id: 12, created: 0, title: 'موعد الدرس', body: 'الدرس غدًا' };
   const requests = [];
+  const state = new Map();
   const env = {
+    noticeFilter: 'all',
+    localStorage: {getItem:key=>state.get(key),setItem:(key,value)=>state.set(key,value)},
+    button: (label,click) => ({label,click}),
     $: () => list, window: {}, date: String, el: (_tag, text) => text,
-    wrap: (_class, ...items) => items, online: true,
+    wrap: (_class, ...items) => Object.assign(items,{dataset:{},append(...extra){items.push(...extra);}}), online: true,
     rpc: async (op, options) => {
       requests.push([op, options.refresh]);
       return { notices: [notice], online: env.online };
     },
   };
   await runInNewContext(script.slice(start, end) + '\nrefreshStudentNotices(true);', env);
-  assert.deepEqual(Array.from(list.children[0]), ['0', notice.title, notice.body]);
+  assert.deepEqual(Array.from(list.children[0]).slice(0,3), ['0', notice.title, notice.body]);
   env.online = false;
   await runInNewContext('refreshStudentNotices();', env);
   assert.match(list.children[0], /المحفوظة على الهاتف/);
-  assert.deepEqual(Array.from(list.children[1]), ['0', notice.title, notice.body]);
+  assert.deepEqual(Array.from(list.children[1]).slice(0,3), ['0', notice.title, notice.body]);
   assert.deepEqual(requests, [['studentNotices', true], ['studentNotices', false]]);
+  await list.children[1][3].click();
+  assert.equal(list.children[1][3], 'مقروءة');
 });
 
 test('source images are published without text extraction', () => {

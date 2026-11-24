@@ -51,7 +51,7 @@ test('the Worker accepts the existing Android requests and isolates student repl
   const { entries } = await owner({ op: 'feedback' });
   assert.equal(entries.length, 1);
   await learner({ op: 'feedback', name: 'طالب', device }, 400);
-  await owner({ op: 'reply', id: entries[0].id, body: 'تمّ.' });
+  assert.deepEqual(await owner({ op: 'reply', id: entries[0].id, body: 'تمّ.' }), {id:entries[0].id,reply:'تمّ.'});
   const synced = await learner({ op: 'sync', name: 'طالب', device });
   assert.equal(synced.entries[0].reply, 'تمّ.');
   assert.deepEqual((await learner({ op: 'sync', name: 'طالب آخر', device: secret() })).entries, []);

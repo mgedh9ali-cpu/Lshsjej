@@ -71,7 +71,7 @@ public final class RoomActivity extends Activity {
     @Override protected void onStart(){
         super.onStart();
         foreground=true;
-        if(!owner)syncTimer.post(retrySync);
+        if(!owner){syncTimer.removeCallbacks(retrySync);syncTimer.post(retrySync);}
     }
 
     @Override protected void onStop(){
@@ -131,17 +131,63 @@ public final class RoomActivity extends Activity {
     private void syncCloud()throws Exception{
         if(!linked()||!localData().getBoolean("remembered",false))return;
         SharedPreferences config=cloud();
+        JSONObject inbox=studentRequest("sync",new JSONObject());
         JSONArray pending=pendingSuggestions();
+        boolean sent=false;
         while(pending.length()>0){
-            studentRequest("suggest",pending.getJSONObject(0));
-            pending.remove(0);
+            try{studentRequest("suggest",pending.getJSONObject(0));}
+            catch(Exception error){break;}
+            pending.remove(0);sent=true;
             if(!config.edit().putString("outbox",pending.toString()).commit())throw new Exception("تعذّر حفظ حالة الإرسال.");
         }
-        JSONObject inbox=studentRequest("sync",new JSONObject());
+        if(sent){
+            try{inbox=studentRequest("sync",new JSONObject());}catch(Exception ignored){}
+        }
+        notifyStudent(inbox);
         boolean changed=!inbox.getJSONArray("entries").toString().equals(config.getString("feedback","[]"));
         config.edit().putString("feedback",inbox.getJSONArray("entries").toString()).apply();
         updateStudentNotices(localData(),inbox.getJSONArray("notices"));
         if(changed)refreshCloudUI();
+    }
+
+    private static final String NOTICE_CHANNEL="class_updates";
+    private boolean studentAlertsAllowed(){
+        android.app.NotificationManager manager=getSystemService(android.app.NotificationManager.class);
+        return (android.os.Build.VERSION.SDK_INT<24||manager.areNotificationsEnabled()) &&
+            (android.os.Build.VERSION.SDK_INT<33||checkSelfPermission("android.permission.POST_NOTIFICATIONS")==android.content.pm.PackageManager.PERMISSION_GRANTED);
+    }
+    private void notifyStudent(JSONObject inbox)throws JSONException{
+        if(!localData().getBoolean("remembered",false))return;
+        if(!localData().getBoolean("alerts",false)||!studentAlertsAllowed())return;
+        JSONArray notices=inbox.getJSONArray("notices"), entries=inbox.getJSONArray("entries");
+        JSONArray previous=new JSONArray(localData().getString("noticeCache","[]"));
+        JSONArray oldEntries=new JSONArray(cloud().getString("feedback","[]"));
+        Set<Long> priorIds=new HashSet<>();
+        for(int i=0;i<previous.length();i++)priorIds.add(previous.getJSONObject(i).getLong("id"));
+        Map<String,String> oldReplies=new HashMap<>();
+        for(int i=0;i<oldEntries.length();i++){
+            JSONObject item=oldEntries.getJSONObject(i);
+            oldReplies.put(item.getString("id"),item.optString("reply",""));
+        }
+        boolean newReply=false;
+        for(int i=0;i<entries.length();i++){
+            JSONObject item=entries.getJSONObject(i);
+            String reply=item.isNull("reply")?"":item.optString("reply","");
+            if(!reply.isEmpty()&&!reply.equals(oldReplies.get(item.getString("id"))))newReply=true;
+        }
+        boolean newNotice=false;
+        for(int i=0;i<notices.length();i++)if(!priorIds.contains(notices.getJSONObject(i).getLong("id")))newNotice=true;
+        if(!newReply&&!newNotice)return;
+        android.app.NotificationManager manager=getSystemService(android.app.NotificationManager.class);
+        if(android.os.Build.VERSION.SDK_INT>=26)
+            manager.createNotificationChannel(new android.app.NotificationChannel(NOTICE_CHANNEL,"أخبار الصف",android.app.NotificationManager.IMPORTANCE_DEFAULT));
+        Intent launch=new Intent(this,RoomActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        android.app.PendingIntent tap=android.app.PendingIntent.getActivity(this,0,launch,android.app.PendingIntent.FLAG_IMMUTABLE);
+        android.app.Notification.Builder builder=android.os.Build.VERSION.SDK_INT>=26?
+            new android.app.Notification.Builder(this,NOTICE_CHANNEL):new android.app.Notification.Builder(this);
+        manager.notify(101,builder.setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("قوم دروس")
+            .setContentText(newReply?"وصلك رد في الاقتراحات.":"لديك إشعار جديد في الصف.")
+            .setAutoCancel(true).setVisibility(android.app.Notification.VISIBILITY_PRIVATE).setContentIntent(tap).build());
     }
 
     private void refreshCloudUI(){
@@ -189,7 +235,13 @@ public final class RoomActivity extends Activity {
 
     private Object studentAccount(String op,JSONObject p)throws Exception{
         SharedPreferences local=localData();
-        String name=RoomStore.check(p,"name",100);
+        String importedEmail=local.getString("email","");
+        String email=p.optString("email","").trim().toLowerCase(Locale.ROOT);
+        if(email.length()>254||!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches())
+            throw new Exception("أدخل عنوان بريد إلكتروني صحيحًا.");
+        String name=op.equals("register")?RoomStore.check(p,"name",100):local.getString("name","");
+        if(!op.equals("register")&&!importedEmail.isEmpty()&&!importedEmail.equals(email))
+            throw new Exception("البريد أو كلمة السر غير صحيحة.");
         String password=p.optString("password","");
         if(password.length()<6||password.length()>128)throw new Exception("اكتب كلمة سر من 6 إلى 128 حرفًا.");
         SharedPreferences.Editor edit=local.edit();
@@ -203,11 +255,11 @@ public final class RoomActivity extends Activity {
         }else{
             byte[] salt=android.util.Base64.decode(local.getString("salt",""),0);
             byte[] digest=android.util.Base64.decode(local.getString("hash",""),0);
-            if(!local.contains("hash")||!local.getString("name","").equals(name)||
+            if(!local.contains("hash")||
                 !java.security.MessageDigest.isEqual(digest,localHash(password.toCharArray(),salt)))
                 throw new Exception("الاسم أو كلمة السر غير صحيحة.");
         }
-        if(!edit.putBoolean("remembered",true).commit())throw new Exception("تعذّر حفظ الحساب على الهاتف.");
+        if(!edit.putString("email",email).putBoolean("remembered",true).commit())throw new Exception("تعذّر حفظ الحساب على الهاتف.");
         syncTimer.removeCallbacks(retrySync);
         syncTimer.post(retrySync);
         return RoomStore.obj("name",name);
@@ -224,7 +276,7 @@ public final class RoomActivity extends Activity {
             try{input=new JSONObject(raw);}catch(JSONException error){return;}
             String operation=input.optString("op");
             if(operation.startsWith("online")||operation.startsWith("shared")||
-                    operation.equals("studentFeedback")||operation.equals("studentSuggest")){
+                    operation.equals("studentFeedback")||operation.equals("studentNotices")||operation.equals("studentSuggest")){
                 syncExecutor.execute(()->{
                     try{
                         if(owner?token.isEmpty():!localData().getBoolean("remembered",false))
@@ -258,13 +310,16 @@ public final class RoomActivity extends Activity {
                                     result=RoomStore.obj();
                                 }
                                 break;
+                            case "studentNotices":
                             case "studentFeedback":
                                 if(owner)throw new Exception("العملية للطالب.");
                                 if(input.optBoolean("refresh")){
-                                    syncTimer.removeCallbacks(retrySync);
-                                    syncTimer.post(retrySync);
+                                    try{syncCloud();}catch(Exception error){updateStudentNotices(localData(),null);}
                                 }
-                                result=studentFeedback();break;
+                                result=operation.equals("studentFeedback")?studentFeedback():
+                                    RoomStore.obj("notices",new JSONArray(localData().getString("noticeCache","[]")),
+                                        "online",noticesConnected,"configured",linked());
+                                break;
                             case "studentSuggest":
                                 if(owner||!linked())throw new Exception("اربط الصف عبر الإنترنت أولًا.");
                                 JSONArray queue=pendingSuggestions();
@@ -293,19 +348,23 @@ public final class RoomActivity extends Activity {
                     if(op.equals("boot")){
                         SharedPreferences local=localData();
                         value=RoomStore.obj("owner",owner,"studentName",owner?"":local.getString("name",""),
-                            "savedSession",owner&&!token.isEmpty(),"hasAccount",!owner&&local.contains("hash"),
+                            "studentEmail",owner?"":local.getString("email",""),"savedSession",owner&&!token.isEmpty(),"hasAccount",!owner&&local.contains("hash"),
                             "cloudUrl",cloud().getString("url",CloudClass.DEFAULT_ORIGIN),
                             "locked",!owner&&!local.getBoolean("remembered",false),
                             "setup",owner&&((JSONObject)store.handle(true,"device",RoomStore.obj("op","status"))).optBoolean("setup"));
                     }else if(!owner&&(op.equals("register")||op.equals("unlock"))){
                         value=studentAccount(op,p);
-                    }else if(!owner&&op.equals("studentNotices")){
-                        if(!localData().getBoolean("remembered",false))throw new Exception("سجّل الدخول لعرض الإشعارات.");
-                        if(p.optBoolean("refresh")){
-                            syncTimer.removeCallbacks(retrySync);
-                            syncTimer.post(retrySync);
+                    }else if(!owner&&op.equals("studentLogout")){
+                        if(!localData().edit().putBoolean("remembered",false).commit())throw new Exception("تعذّر تسجيل الخروج.");
+                        value=RoomStore.obj();
+                    }else if(!owner&&op.equals("studentAlertSettings")){
+                        if(p.has("enabled")){
+                            boolean enabled=p.getBoolean("enabled");
+                            localData().edit().putBoolean("alerts",enabled).apply();
+                            if(enabled&&android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)
+                                runOnUiThread(()->requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},55));
                         }
-                        value=RoomStore.obj("notices",new JSONArray(localData().getString("noticeCache","[]")),"online",noticesConnected,"configured",linked());
+                        value=RoomStore.obj("allowed",studentAlertsAllowed(),"enabled",localData().getBoolean("alerts",false));
                     }else if(!owner&&(op.equals("getNote")||op.equals("saveNote"))){
                         if(!localData().getBoolean("remembered",false))throw new Exception("سجّل الدخول لفتح ملاحظاتك.");
                         int index=p.optInt("index",-1);
@@ -398,6 +457,10 @@ public final class RoomActivity extends Activity {
                     .setType(mime).putExtra(Intent.EXTRA_TITLE,name),92);
             }catch(ActivityNotFoundException e){pendingSourceDownload=null;noticeBackup(false,"تعذّر فتح نافذة التنزيل.");}
         });
+    }
+    @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] results){
+        super.onRequestPermissionsResult(requestCode,permissions,results);
+        if(requestCode==55&&!isDestroyed())web.evaluateJavascript("if(window.studentPermissionChanged)window.studentPermissionChanged()",null);
     }
     @Override protected void onActivityResult(int code,int result,Intent data){
         super.onActivityResult(code,result,data);

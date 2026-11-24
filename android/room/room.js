@@ -2,7 +2,7 @@
 const $=sel=>document.querySelector(sel);
 const main=$('main'), bottomNav=$('#bottom-nav'), pending=new Map();
 let serial=0,revision=0,page='login',name='',owner=false,setup=false,cache,selected,hideTimer;
-let offline=false,hasAccount=false,locked=false,previewUrl=null,cloudUrl='';
+let offline=false,hasAccount=false,locked=false,previewUrl=null,cloudUrl='',studentEmail='';
 function rpc(op,data={},progress){
   if(offline && ['home','subject','source','addSource'].includes(op))return offlineData(op,data);
   const id=++serial;
@@ -99,7 +99,7 @@ bottomNav.addEventListener('keydown',event=>{
 async function boot(){
   const state=await rpc('boot');
   owner=state.owner;setup=state.setup;hasAccount=state.hasAccount;locked=state.locked;offline=!owner;
-  cloudUrl=state.cloudUrl||'';
+  cloudUrl=state.cloudUrl||'';studentEmail=state.studentEmail||'';
   if(owner&&state.savedSession){
     try{name=(await rpc('resume')).name;}
     catch(err){message(err.message);}
@@ -143,12 +143,17 @@ function login(){
   })];
 }
 function unlock(){
+  const email=field('البريد الإلكتروني','email','email',studentEmail);
+  email.querySelector('input').dir='ltr';
+  email.querySelector('input').autocomplete='username';
+  const password=field('كلمة السر','password','password');
+  password.querySelector('input').autocomplete=hasAccount?'current-password':'new-password';
   return [hero('قوم دروس','حساب الطالب على هذا الهاتف'),
-    !hasAccount&&el('p','تبقى كلمة السر على هاتفك. عند توفر الإنترنت، يُرسل اسمك تلقائيًا إلى لوحة المالك.','empty-state'),
     form(hasAccount?'تسجيل الدخول':'إنشاء حساب الطالب',[
-      field('الاسم','name','text',name),field('كلمة السر · ٦ أحرف على الأقل','password','password')
-    ],hasAccount?'دخول':'تسجيل',async data=>{
+      ...(!hasAccount?[field('الاسم','name')]:[]),email,password
+    ],hasAccount?'دخول':'إنشاء الحساب',async data=>{
       name=(await rpc(hasAccount?'unlock':'register',data)).name;
+      studentEmail=data.email.trim().toLowerCase();
       locked=false;hasAccount=true;
       await go('home');
     })];
@@ -181,43 +186,88 @@ async function home(){
     owner&&wrap('grid stat-grid',tile('تسجيلات الطلاب','عرض المسجلين','◉',()=>go('accounts')),tile('صندوق الاقتراحات',number.format(waiting)+' بانتظار الرد','✉',()=>go('feedback')),tile('إشعار جديد','إرسال إلى الصف','＋',()=>go('feed'))),
     owner&&wrap('row',button('منشورات الطلاب',()=>go('sharedAll'),'primary'),button('تقارير الصف',()=>go('reports'))),owner&&el('h2','المواد الدراسية','section-title'),search,grid,owner&&form('مادة جديدة',[field('اسم المادة','name')],'إضافة مادة',async d=>{await rpc('onlineAddSubject',d);await rpc('addSubject',d);await go('home');})];
 }
-function noticeCards(notices){
-  return notices.map(n=>wrap('card',el('small',date(n.created)),el('h3',n.title),el('pre',n.body)));
+let noticeFilter='all';
+function wasRead(key){return localStorage.getItem(key)==='yes';}
+function markRead(key){localStorage.setItem(key,'yes');}
+function noticeCards(notices,track=false){
+  return notices.map(n=>{
+    const key='qum-notice:'+n.id;
+    const read=track&&wasRead(key);
+    const card=wrap('card inbox-card',el('small',date(n.created)),el('h3',n.title),el('pre',n.body));
+    if(track){
+      card.dataset.unread=String(!read);
+      card.append(read?el('small','مقروءة'):button('تحديد كمقروءة',()=>{
+        markRead(key);return refreshStudentNotices();
+      }));
+    }
+    return card;
+  });
 }
 async function refreshStudentNotices(refresh=false){
   const list=$('#student-notices');
   if(!list)return;
   const {notices,online,configured}=await rpc('studentNotices',{refresh});
   if(!list.isConnected)return;
-  const status=online?(notices.length?'':'لا توجد إشعارات بعد.')
+  const shown=noticeFilter==='unread'?notices.filter(n=>!wasRead('qum-notice:'+n.id)):notices;
+  const status=online?(shown.length?'':noticeFilter==='unread'?'لا توجد إشعارات غير مقروءة.':'لا توجد إشعارات بعد.')
     :notices.length?'تعذّر الوصول إلى لوحة المالك. هذه الإشعارات المحفوظة على الهاتف.'
     :configured?'بانتظار الاتصال بخادم الصف. تظهر التحديثات عند عودة الإنترنت.':'اربط الصف عبر الإنترنت من الإعدادات لاستقبال الإشعارات.';
-  list.replaceChildren(...(status?[el('p',status,'empty-state')]:[]),...noticeCards(notices));
+  list.replaceChildren(...(status?[el('p',status,'empty-state')]:[]),...noticeCards(shown,true));
 }
 window.noticesUpdated=()=>refreshStudentNotices().catch(()=>{});
 async function feed(){
   const heading=hero('الإشعارات','أخبار الصف وتذكيراته');
   if(!owner){
     const list=wrap('registration-list');list.id='student-notices';list.setAttribute('aria-live','polite');
-    return [heading,button('تحديث الإشعارات',()=>refreshStudentNotices(true)),list];
+    const filters=segments('فرز الإشعارات',[['all','الكل'],['unread','غير المقروءة']],noticeFilter,value=>{
+      noticeFilter=value;return refreshStudentNotices();
+    });
+    return [heading,wrap('row',filters,button('تحديث',()=>refreshStudentNotices(true))),list];
   }
   const notices=cloudUrl?(await rpc('onlineNotices')).notices:cache.notices;
   return [heading,!cloudUrl&&connectionPrompt(),cloudUrl&&form('إشعار عام',[field('العنوان','title'),field('نص الإشعار','body','textarea')],'نشر للطلاب',async data=>{
-    await rpc('onlinePublish',data);await go('feed');
+    await rpc('onlinePublish',data);message('تم نشر الإشعار في الصف.');await go('feed');
   }),...noticeCards(notices),!notices.length&&el('p','ستظهر أخبار الصف هنا عند نشرها.'),button('تحديث',()=>go('feed'))];
 }
 const date=v=>new Intl.DateTimeFormat('ar-SY',{weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(v);
+let ownerFeedbackFilter='all', studentFeedbackFilter='all';
 function feedbackCard(entry){
   const heading=(owner?entry.name+' · ':'')+date(entry.created);
-  return wrap('card',el('small',heading),el('pre',entry.body),el('b',entry.reply?'رد المالك':'بانتظار الرد'),
-    ...(entry.reply?[el('pre',entry.reply)]:[]));
+  const card=wrap('card inbox-card',el('small',heading),el('pre',entry.body),el('strong',entry.reply?'تم الرد':'بانتظار الرد'));
+  if(owner){
+    const key='qum-owner-suggestion:'+entry.id;
+    const read=wasRead(key);
+    card.dataset.unread=String(!read);
+    card.append(read?el('small','مقروء'):button('تحديد كمقروء',()=>{
+      markRead(key);
+      if(ownerFeedbackFilter==='unread')card.remove();
+      else{
+        card.dataset.unread='false';
+        const mark=card.querySelector('button');
+        if(mark)mark.replaceWith(el('small','مقروء'));
+      }
+    }));
+  }
+  if(entry.reply){
+    const key='qum-reply:'+entry.id;
+    const read=localStorage.getItem(key)===entry.reply;
+    const reply=wrap('reply',el('small','رد المالك'),el('pre',entry.reply));
+    card.append(reply);
+    if(!owner){
+      card.dataset.unread=String(!read);
+      card.append(read?el('small','مقروء'):button('تحديد الرد كمقروء',()=>{
+        localStorage.setItem(key,entry.reply);return refreshStudentFeedback();
+      }));
+    }
+  }
+  return card;
 }
 function showStudentFeedback(list,result){
-  const entries=result.entries.map(feedbackCard);
+  const entries=result.entries.filter(entry=>studentFeedbackFilter==='all'||(entry.reply&&localStorage.getItem('qum-reply:'+entry.id)!==entry.reply)).map(feedbackCard);
   const pending=result.pending.map(item=>wrap('card',el('small',date(item.created)),
     el('pre',item.body),el('strong','بانتظار الإرسال')));
   const state=!result.configured?'اربط الصف عبر الإنترنت لإرسال الاقتراحات.'
-    :pending.length||entries.length?'':'لم ترسل اقتراحات بعد.';
+    :pending.length||entries.length?'':studentFeedbackFilter==='unread'?'لا توجد ردود غير مقروءة.':'لم ترسل اقتراحات بعد.';
   list.replaceChildren(...pending,...entries,...(state?[el('p',state,'empty-state')]:[]));
 }
 async function refreshStudentFeedback(refresh=false){
@@ -247,15 +297,27 @@ async function feedback(){
   if(owner){
     const entries=cloudUrl?(await rpc('onlineFeedback')).entries:cache.feedback;
     ownerInboxSnapshot=JSON.stringify(entries);
-    return [hero('صندوق الاقتراحات','رسائل الطلاب'),!cloudUrl&&connectionPrompt(),
-      ...entries.map(entry=>{
+    const visible=entries.filter(entry=>ownerFeedbackFilter==='all'||(ownerFeedbackFilter==='unread'? !wasRead('qum-owner-suggestion:'+entry.id):Boolean(entry.reply)===(ownerFeedbackFilter==='done')));
+    const filters=segments('فرز الاقتراحات',[['all','الكل'],['unread','غير المقروءة'],['waiting','بانتظار الرد'],['done','تم الرد']],ownerFeedbackFilter,value=>{
+      ownerFeedbackFilter=value;return go('feedback');
+    });
+    return [hero('الاقتراحات','رسائل الطلاب'),filters,!cloudUrl&&connectionPrompt(),
+      ...visible.map(entry=>{
         const card=feedbackCard(entry);
-        if(cloudUrl)card.append(form('الرد',[field('نص الرد','body','textarea',entry.reply||'')],'حفظ الرد',async data=>{
-          await rpc('onlineReply',{...data,id:entry.id});await go('feedback');
-        }));
+        if(cloudUrl){
+          const editor=el('details');
+          editor.append(el('summary',entry.reply?'تعديل الرد':'الرد على الطالب'),form('',[field('نص الرد','body','textarea',entry.reply||'')],'إرسال الرد',async data=>{
+            const receipt=await rpc('onlineReply',{body:data.body,id:entry.id});
+            if(receipt.id!==entry.id||receipt.reply!==data.body.trim())throw Error('تعذّر تأكيد حفظ الرد.');
+            markRead('qum-owner-suggestion:'+entry.id);
+            message('حُفظ الرد على الخادم وسيظهر عند مزامنة الطالب.');
+            await go('feedback');
+          }));
+          card.append(editor);
+        }
         return card;
       }),
-      !entries.length&&el('p','لا توجد اقتراحات بعد.','empty-state'),button('تحديث',()=>go('feedback'))];
+      !visible.length&&el('p','لا توجد اقتراحات في هذا العرض.','empty-state'),button('تحديث',()=>go('feedback'))];
   }
   const draftKey='suggestion-draft';
   const draft=field('اكتب اقتراحك','body','textarea',localStorage.getItem(draftKey)||localStorage.getItem('suggestion-pending-body')||'');
@@ -272,7 +334,10 @@ async function feedback(){
     showStudentFeedback(list,result);
     message(result.pending.length?'حُفظ الاقتراح للإرسال عند الاتصال.':'وصل الاقتراح إلى المالك.');
   });
-  return [hero('الاقتراحات','رسائلي وردود المالك'),composer,button('تحديث الردود',()=>refreshStudentFeedback(true)),list];
+  const filters=segments('فرز الردود',[['all','الكل'],['unread','ردود غير مقروءة']],studentFeedbackFilter,value=>{
+    studentFeedbackFilter=value;return refreshStudentFeedback();
+  });
+  return [hero('الاقتراحات','رسائلي وردود المالك'),composer,wrap('row',filters,button('تحديث',()=>refreshStudentFeedback(true))),list];
 }
 const dateTime=v=>new Intl.DateTimeFormat('ar-SY',{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}).format(v);
 function updateRegistrationList(container, data){
@@ -311,28 +376,73 @@ function applyTheme(theme){
   document.documentElement.dataset.theme=theme;
 }
 applyTheme(localStorage.getItem('qum-theme')||'system');
-function settings(){
-  const theme=el('select');
-  theme.setAttribute('aria-label','المظهر');
-  for(const [key,label] of [['system','حسب الجهاز'],['light','فاتح'],['dark','داكن']]){
-    const option=el('option',label);option.value=key;theme.append(option);
+function segments(label,choices,active,change){
+  const group=wrap('segments');
+  group.setAttribute('role','group');group.setAttribute('aria-label',label);
+  for(const [key,title] of choices){
+    const action=button(title,async()=>{
+      await change(key);
+      for(const item of group.children)item.setAttribute('aria-pressed',String(item.dataset.value===key));
+    });
+    action.dataset.value=key;action.setAttribute('aria-pressed',String(key===active));group.append(action);
   }
-  theme.value=localStorage.getItem('qum-theme')||'system';
-  theme.onchange=()=>{localStorage.setItem('qum-theme',theme.value);applyTheme(theme.value);};
-  const appearance=wrap('card',el('h2','المظهر'),wrap('field',el('span','ألوان التطبيق'),theme));
-  const connection=owner?wrap('card',el('h2','اتصال لوحة المالك')):null;
-  if(connection){
-    const status=el('p','جارٍ فحص الاتصال…');
+  return group;
+}
+function confirmAction(title,description,action='حذف'){
+  return new Promise(resolve=>{
+    const dialog=el('dialog','','app-dialog');
+    let accepted=false;
+    dialog.setAttribute('aria-label',title);
+    const done=value=>{accepted=value;dialog.close();};
+    dialog.append(el('h2',title),el('p',description),wrap('row',
+      button('إلغاء',()=>done(false)),button(action,()=>done(true),'danger')));
+    dialog.addEventListener('close',()=>{dialog.remove();resolve(accepted);},{once:true});
+    document.body.append(dialog);dialog.showModal();
+  });
+}
+function settings(){
+  const theme=segments('المظهر',[['system','حسب الجهاز'],['light','فاتح'],['dark','داكن']],localStorage.getItem('qum-theme')||'system',value=>{
+    localStorage.setItem('qum-theme',value);applyTheme(value);
+  });
+  const appearance=wrap('card',el('h2','المظهر'),theme);
+  const account=wrap('card',el('h2','الحساب'),el('strong',name));
+  if(!owner){
+    if(studentEmail)account.append(el('small',studentEmail));
+    else account.append(form('إضافة بريد للحساب المحلي',[field('البريد الإلكتروني','email','email'),field('كلمة السر الحالية','password','password')],'حفظ البريد',async data=>{
+      await rpc('unlock',data);studentEmail=data.email.trim().toLowerCase();await go('settings');
+    }));
+  }
+  account.append(button('تسجيل الخروج',async()=>{
+    if(!await confirmAction('تسجيل الخروج','ستبقى بيانات الحساب على الهاتف.','تسجيل الخروج'))return;
+    await rpc(owner?'logout':'studentLogout');name='';locked=!owner;await go(owner?'login':'unlock');
+  }));
+  const connection=owner?wrap('card',el('h2','اتصال لوحة المالك')):wrap('card',el('h2','تنبيهات الجهاز'));
+  const status=el('p','جارٍ الفحص…');
+  connection.append(status);
+  if(owner){
     const refresh=async()=>{
       status.textContent='جارٍ فحص الاتصال…';
       try{await rpc('onlineStatus');status.textContent='متصل بالصف عبر الإنترنت.';}
       catch(error){status.textContent=error.message;}
     };
-    connection.append(status,button('فحص الاتصال',refresh));
-    refresh();
+    connection.append(button('فحص الاتصال',refresh));refresh();
+  }else{
+    const checked=async()=>{
+      try{
+        const result=await rpc('studentAlertSettings');
+        status.textContent=result.enabled?(result.allowed?'التنبيهات مفعلة أثناء مزامنة التطبيق.':'اسمح بالإشعارات من إعدادات أندرويد.'):'تنبيهات الجهاز متوقفة.';
+        toggle.textContent=result.enabled&&result.allowed?'إيقاف التنبيهات':'تفعيل التنبيهات';
+        toggle.dataset.active=String(result.enabled&&result.allowed);
+      }catch(err){status.textContent=err.message;}
+    };
+    const toggle=button('تفعيل التنبيهات',async()=>{
+      await rpc('studentAlertSettings',{enabled:toggle.dataset.active!=='true'});
+      await checked();
+    });
+    connection.append(toggle);checked();
+    window.studentPermissionChanged=()=>{if(connection.isConnected)checked();};
   }
-  return [hero('الإعدادات',''),appearance,connection,
-    owner&&button('تسجيل الخروج',async()=>{await rpc('logout');name='';await go('login');})];
+  return [hero('الإعدادات',''),appearance,connection,account];
 }
 async function reports(){
   if(!owner)return [];
@@ -442,7 +552,7 @@ function sharedFeed(subject){
     if(!entry.attachment)post.append(photo);
     post.append(button('تنزيل المصدر',()=>rpc('sharedDownload',{id:entry.id})));
     if(owner||entry.mine)post.append(button('حذف المنشور',async()=>{
-        if(!confirm('حذف هذا المصدر من جميع أجهزة الصف؟'))return;
+        if(!await confirmAction('حذف المنشور','سيختفي هذا المصدر من صفحة المادة لدى جميع الطلاب.'))return;
         await rpc('sharedRemove',{id:entry.id});
         await load();
       }));
@@ -549,7 +659,7 @@ function newSource(){
     hero('إضافة مصدر',selected.name),sourceForm(selected)];
 }
 async function source(item){const record=await rpc('source',{id:item.id});const img=el('img');img.src=record.image instanceof Blob?(previewUrl=URL.createObjectURL(record.image)):record.image;img.alt='صورة المصدر';
-  return [button('العودة للمادة',()=>go('subject',selected)),hero(record.title,date(record.created)+(owner&&record.added_by?' · أضافه '+record.added_by:'')),wrap('card',...(record.body?[el('pre',record.body)]:[]),img),owner&&button('حذف المصدر',async()=>{if(confirm('حذف هذا المصدر من الصف؟')){await rpc('remove',{id:item.id});await go('subject',selected);}})];}
+  return [button('العودة للمادة',()=>go('subject',selected)),hero(record.title,date(record.created)+(owner&&record.added_by?' · أضافه '+record.added_by:'')),wrap('card',...(record.body?[el('pre',record.body)]:[]),img),owner&&button('حذف المصدر',async()=>{if(await confirmAction('حذف المصدر','سيُحذف هذا المصدر من الصف.')){await rpc('remove',{id:item.id});await go('subject',selected);}})];}
 async function quiz(item){const q=await rpc('quiz',{id:item.id}),choices=JSON.parse(q.choices),result=el('p');
   return [hero(q.title,selected.name),wrap('card',el('h3',q.question),...choices.map((v,i)=>button(v,async()=>{if(owner){message('معاينة المالك');return;}const score=await rpc('solve',{id:item.id,choice:i});result.textContent=i===score.answer?'إجابة صحيحة':'الإجابة الصحيحة · '+choices[score.answer];})),result),button('العودة للمادة',()=>go('subject',selected))];}
 window.backPage=()=>{if(page==='source'||page==='quiz'||page==='newSource'){go('subject',selected);return true;}if(!owner&&locked)return false;if((name||offline)&&page!=='home'){go('home');return true;}return false;};

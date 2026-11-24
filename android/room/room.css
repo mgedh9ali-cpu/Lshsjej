@@ -393,3 +393,54 @@ main > .hero { animation: page-in var(--motion) both; }
 form progress { width: 100%; height: 9px; accent-color: #14776a; }
 
 .bottom-nav .bottom-tab[aria-current="page"] .bottom-tab-label { margin-inline-start: 0; }
+
+/* A stable, full-width rail keeps the tabs fixed on narrow screens. */
+.bottom-nav {
+  width: min(calc(100% - 20px), 520px);
+  max-width: none;
+  border-radius: 17px;
+  box-shadow: 0 4px 18px #14273d18;
+  padding: 5px;
+  gap: 4px;
+}
+.bottom-nav .bottom-tab { min-height: 52px; border-radius: 12px; padding-inline: 1px; }
+.bottom-nav .bottom-tab-label { font-size: clamp(.62rem, 2.8vw, .76rem); }
+.hero {
+  padding: 12px 4px 6px;
+  gap: 5px;
+  background: none;
+  color: var(--ink);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.hero::before, .hero::after, .hero small:empty { display: none; }
+.hero small { color: var(--muted); }
+.card, form { border-radius: 14px; box-shadow: none; }
+.segments {
+  display: flex;
+  flex: 1 1 220px;
+  min-width: 0;
+  gap: 4px;
+  padding: 4px;
+  background: var(--blue-soft);
+  border-radius: 12px;
+}
+.segments button { flex: 1 1 0; padding: 5px; font-size: .82rem; border-color: transparent; background: transparent; }
+.segments button[aria-pressed="true"] { background: var(--surface); border-color: var(--line); color: var(--ink); font-weight: 700; }
+.inbox-card[data-unread="true"] { border-inline-start: 4px solid #13796b; }
+.reply { display: grid; gap: 4px; border-radius: 10px; background: var(--blue-soft); padding: 10px; }
+.inbox-card details { border-top: 1px solid var(--line); padding-top: 6px; }
+.inbox-card summary { cursor: pointer; min-height: 44px; padding-block: 8px; }
+.app-dialog {
+  width: min(calc(100% - 32px), 400px);
+  max-width: none;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 17px;
+}
+.app-dialog[open] { display: grid; gap: 13px; }
+.app-dialog::backdrop { background: #0d1d2a99; }
+button.danger { background: #8d253a; color: #fff; border-color: #8d253a; font-weight: 700; }
