@@ -110,7 +110,7 @@ async function go(next,item,focusPage=false){
   page=next;const mine=++revision;
   if(item&&(next==='subject'||next==='newSource'))selected=item;
   navigation();
-  const pages={unlock,login,home,feed,feedback,accounts,settings,notes,subject,newSource,source,quiz};
+  const pages={unlock,login,home,feed,feedback,accounts,settings,notes,subject,newSource,source,quiz,sharedAll};
   try{
     if((name||offline)&&['home','feed','feedback','accounts','settings','subject'].includes(next))cache=await rpc('home');
     if(mine!==revision)return;
@@ -167,7 +167,7 @@ function home(){
   const waiting=cache.feedback.filter(x=>!x.reply).length;
   return [hero(owner?'نظرة على الصف':'المواد الدراسية',owner?name:(name||'مكتبة الدروس')),
     owner&&wrap('grid stat-grid',tile('تسجيلات الطلاب','عرض المسجلين','◉',()=>go('accounts')),tile('صندوق الاقتراحات',number.format(waiting)+' بانتظار الرد','✉',()=>go('feedback')),tile('إشعار جديد','إرسال إلى الصف','＋',()=>go('feed'))),
-    owner&&el('h2','المواد الدراسية','section-title'),search,grid,owner&&form('مادة جديدة',[field('اسم المادة','name')],'إضافة مادة',async d=>{await rpc('addSubject',d);await go('home');})];
+    owner&&button('منشورات الطلاب',()=>go('sharedAll'), 'primary'),owner&&el('h2','المواد الدراسية','section-title'),search,grid,owner&&form('مادة جديدة',[field('اسم المادة','name')],'إضافة مادة',async d=>{await rpc('addSubject',d);await go('home');})];
 }
 function noticeCards(notices){
   return notices.map(n=>wrap('card',el('small',date(n.created)),el('h3',n.title),el('pre',n.body)));
@@ -376,13 +376,76 @@ function sourceForm(subject){
   upload.querySelector('input').accept='image/jpeg,image/png,image/webp';
   const title=field('عنوان المصدر','title');
   title.querySelector('input').maxLength=180;
-  return form('',[title,upload],offline?'حفظ المصدر':'نشر المصدر',async data=>{
+  let previousFile='',previousTitle='',requestId='';
+  return form('',[title,upload],owner?'حفظ المصدر':'نشر لجميع الطلاب',async data=>{
     const title=data.title.trim();
     if(!title)throw Error('اكتب عنوان المصدر.');
     const image=await prepareSourceImage(data.file);
-    await rpc('addSource',{subject:subject.id,title,image});
+    if(owner){
+      await rpc('addSource',{subject:subject.id,title,image});
+    }else{
+      if(previousFile!==image||previousTitle!==title){
+        previousFile=image;previousTitle=title;
+        requestId=crypto.randomUUID();
+      }
+      await rpc('sharedPublish',{subject:subject.name,title,image,requestId});
+    }
     await go('subject',subject);
   });
+}
+function sharedFeed(subject){
+  const list=wrap('registration-list');
+  const status=el('p','','empty-state');
+  const controls=wrap('row');
+  let loading=false,entries=[],next=null;
+  function card(entry){
+    const image=el('img');
+    image.alt=entry.title;
+    const details=el('details');
+    details.append(el('summary','عرض الصورة'));
+    details.ontoggle=async()=>{
+      if(!details.open||image.hasAttribute('src')||details.dataset.loading)return;
+      details.dataset.loading='true';
+      const notice=el('p','جارٍ تحميل الصورة…');
+      details.append(notice);
+      try{
+        const {entry:record}=await rpc('sharedImage',{id:entry.id});
+        image.src=record.image;
+        details.append(image);
+        notice.remove();
+      }catch(err){notice.textContent=err.message;}
+      finally{delete details.dataset.loading;}
+    };
+    if(owner)details.append(button('حذف المنشور',async()=>{
+      if(!confirm('حذف هذا المصدر من جميع أجهزة الصف؟'))return;
+      await rpc('onlineRemoveSource',{id:entry.id});
+      await load();
+    }));
+    return wrap('card',el('strong',entry.title),el('small',entry.added_by+' · '+entry.subject+' · '+dateTime(entry.created)),details);
+  }
+  async function load(cursor=null,append=false){
+    if(loading)return;
+    loading=true;
+    try{
+      const data=await rpc('sharedList',{subject,before:cursor});
+      if(append)entries.push(...data.entries);
+      else entries=data.entries;
+      next=data.next;
+      list.replaceChildren(...entries.map(card));
+      status.textContent=entries.length?'':'لا توجد منشورات بعد.';
+      controls.replaceChildren(refresh,...(next?[more]:[]));
+    }catch(err){status.textContent=err.message;}
+    finally{loading=false;}
+  }
+  const refresh=button('تحديث المنشورات',()=>load());
+  const more=button('عرض منشورات أقدم',()=>load(next,true));
+  controls.append(refresh);
+  const section=wrap('registration-list',controls,status,list);
+  load();
+  return section;
+}
+function sharedAll(){
+  return [hero('منشورات الطلاب','كل المواد'),sharedFeed()];
 }
 let tab='sources';
 async function subject(item){
@@ -397,7 +460,7 @@ async function subject(item){
   const items=[];let count=0;const dayCounts={};for(const d of content.sources){const k=date(d.created);dayCounts[k]=(dayCounts[k]||0)+1;}
   for(const d of content.sources){const day=date(d.created);if(day!==last){items.push(el('h3',day));last=day;count=dayCounts[day];}items.push(button('مصدر '+number.format(count--)+' · '+d.title+(owner&&d.added_by?' · '+d.added_by:''),()=>go('source',d),'source-item'));}
   const add=button('إضافة مصدر',()=>go('newSource',s,true),'primary');
-  return [hero(s.name,s.page?'وصل الصف إلى صفحة '+number.format(s.page):''),controls,el('h2','مصادر المادة','section-title'),offline&&locked?button('فتح مصادري المحفوظة',()=>go('unlock')):add,...items,!items.length&&el('p',offline&&locked?'سجّل الدخول لعرض مصادرك.':'لا توجد مصادر لهذه المادة بعد.','empty-state'),owner&&form('تقدّم الصف',[field('رقم الصفحة','page','number',s.page||'')],'حفظ الصفحة',async d=>{await rpc('progress',{subject:s.id,page:Number(d.page)});await go('subject',s);})];
+  return [hero(s.name,s.page?'وصل الصف إلى صفحة '+number.format(s.page):''),controls,el('h2','مصادر المادة','section-title'),offline&&locked?button('فتح مصادري المحفوظة',()=>go('unlock')):add,!locked&&sharedFeed(s.name),...items,owner&&form('تقدّم الصف',[field('رقم الصفحة','page','number',s.page||'')],'حفظ الصفحة',async d=>{await rpc('progress',{subject:s.id,page:Number(d.page)});await go('subject',s);})];
 }
 function newSource(){
   return [button('العودة إلى المصادر',()=>go('subject',selected),'back-action'),

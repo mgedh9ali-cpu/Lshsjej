@@ -1,5 +1,21 @@
 import { classroom } from './classroom.mjs';
 
+let initialized = false;
+const schema = [
+  "CREATE TABLE IF NOT EXISTS shared_sources (id INTEGER PRIMARY KEY AUTOINCREMENT, publisher TEXT NOT NULL, request_id TEXT NOT NULL, subject TEXT NOT NULL, title TEXT NOT NULL, image TEXT NOT NULL, added_by TEXT NOT NULL, created INTEGER NOT NULL, UNIQUE(publisher,request_id));",
+  "CREATE INDEX IF NOT EXISTS shared_sources_subject_id ON shared_sources(subject,id DESC);",
+  'CREATE TABLE IF NOT EXISTS students (id TEXT PRIMARY KEY, name TEXT NOT NULL, created INTEGER NOT NULL);',
+  'CREATE TABLE IF NOT EXISTS notices (id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, created INTEGER NOT NULL);',
+  'CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, student TEXT NOT NULL, body TEXT NOT NULL, created INTEGER NOT NULL, reply TEXT);',
+  'CREATE INDEX IF NOT EXISTS feedback_student ON feedback(student, created);',
+];
+
+async function initialize(binding) {
+  if (initialized) return;
+  await binding.batch(schema.map(sql => binding.prepare(sql)));
+  initialized = true;
+}
+
 function database(binding) {
   return {
     prepare(sql) {
@@ -14,7 +30,7 @@ function database(binding) {
   };
 }
 
-async function readJson(request) {
+async function readJson(request, limit) {
   const reader = request.body?.getReader();
   if (!reader) return null;
   const decoder = new TextDecoder();
@@ -24,13 +40,13 @@ async function readJson(request) {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > 32768) {
+    if (size > limit) {
       await reader.cancel();
       throw Object.assign(Error('الطلب كبير جدًا.'), { status: 413 });
     }
     body += decoder.decode(value, { stream: true });
   }
-  try { return JSON.parse(body + decoder.decode()); }
+  try { return { data:JSON.parse(body + decoder.decode()), size }; }
   catch { return null; }
 }
 
@@ -41,10 +57,26 @@ export default {
       return send({ error: 'المسار غير موجود.' }, 404);
     }
     try {
-      const data = await readJson(request);
+      const declaredSize = Number(request.headers.get('Content-Length'));
+      if (declaredSize > 600000) return send({error:'الطلب كبير جدًا.'}, 413);
+      const parsed = await readJson(request, 600000);
+      const data = parsed?.data;
+      if (data?.op !== 'addsource' && parsed?.size > 32768) return send({error:'الطلب كبير جدًا.'}, 413);
       if (!data || typeof data !== 'object' || Array.isArray(data)) return send({ error: 'صيغة الطلب غير صالحة.' }, 400);
-      const handle = classroom(database(env.DB), env.QUM_OWNER_KEY, env.QUM_STUDENT_KEY, env.QUM_OWNER_DEVICE_HASH);
-      return send(await handle(request.headers.get('Authorization') || '', data));
+      const authorization = request.headers.get('Authorization') || '';
+      if (!env.DB || !env.STUDENT_RATE || !env.SUGGESTION_RATE) return send({error:'الربط عبر الإنترنت قيد الإعداد.'}, 503);
+      if (['sync', 'suggest', 'addsource'].includes(data.op)) {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        const allowed = await env.STUDENT_RATE.limit({ key: ip });
+        if (!allowed.success) {
+          return send({ error: 'انتظر قليلًا ثم حاول مجددًا.' }, 429);
+        }
+      }
+      const handle = classroom(database(env.DB), env.QUM_OWNER_KEY, env.QUM_STUDENT_KEY, () => initialize(env.DB), async student => {
+        const allowed = await env.SUGGESTION_RATE.limit({ key: student });
+        if (!allowed.success) throw Object.assign(Error('انتظر قليلًا ثم حاول مجددًا.'), { status: 429 });
+      }, env.QUM_OWNER_DEVICE_HASH);
+      return send(await handle(authorization, data));
     } catch (error) {
       return send({ error: error.status ? error.message : 'تعذّر تنفيذ الطلب على خدمة الصف.' }, error.status || 500);
     }

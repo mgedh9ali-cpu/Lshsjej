@@ -10,7 +10,7 @@ function identifier(value) {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{32,64}$/.test(value)) fail(400, 'معرّف العملية غير صالح.');
   return value;
 }
-export function classroom(db, owner, invite, ownerDeviceHash) {
+export function classroom(db, owner, invite, initialize, limitSuggestion = async () => {}, ownerDeviceHash) {
   const notices = () => db.prepare('SELECT * FROM notices ORDER BY id DESC LIMIT 100').all();
   const feedback = student => {
     const query = 'SELECT f.id,f.body,f.created,f.reply,s.name FROM feedback f JOIN students s ON s.id=f.student';
@@ -18,20 +18,43 @@ export function classroom(db, owner, invite, ownerDeviceHash) {
       ? db.prepare(query + ' WHERE f.student=? ORDER BY f.created DESC LIMIT 100').all(student)
       : db.prepare(query + ' ORDER BY f.created DESC LIMIT 200').all();
   };
+  function sourceId(id) {
+    if (!Number.isSafeInteger(id) || id < 1) fail(400, 'المصدر غير صالح.');
+    return id;
+  }
+  async function sharedSources(data, isOwner) {
+    if (data.op === 'source') {
+      const entry = await db.prepare('SELECT id, subject, title, image, added_by, created FROM shared_sources WHERE id=?').get(sourceId(data.id));
+      if (!entry) fail(404, 'المصدر غير موجود.');
+      return { entry };
+    }
+    const before = data.before == null ? Number.MAX_SAFE_INTEGER : sourceId(data.before);
+    const all = isOwner && data.subject == null;
+    const columns = 'SELECT id, subject, title, added_by, created FROM shared_sources';
+    const entries = all
+      ? await db.prepare(columns + ' WHERE id<? ORDER BY id DESC LIMIT 21').all(before)
+      : await db.prepare(columns + ' WHERE subject=? AND id<? ORDER BY id DESC LIMIT 21').all(field(data.subject, 100), before);
+    const more = entries.length > 20;
+    if (more) entries.pop();
+    return { entries, next: more ? entries.at(-1).id : null };
+  }
   return async (authorization, data) => {
     if (typeof owner !== 'string' || owner.length < 32 || typeof invite !== 'string' || invite.length < 24 || owner === invite) {
       fail(503, 'الربط عبر الإنترنت قيد الإعداد.');
     }
     const key = digest(authorization.match(/^Bearer ([a-zA-Z0-9_-]+)$/)?.[1] ?? '');
     const hashOwner = digest(owner);
-    const ownerDevice = authorization.match(/^OwnerDevice ([a-zA-Z0-9_-]{43})$/)?.[1];
-    const approvedDevice = typeof ownerDeviceHash === 'string' && /^[a-zA-Z0-9_-]{43}$/.test(ownerDeviceHash)
+    const device = authorization.match(/^OwnerDevice ([a-zA-Z0-9_-]{43})$/)?.[1];
+    const approved = typeof ownerDeviceHash === 'string' && /^[a-zA-Z0-9_-]{43}$/.test(ownerDeviceHash)
       ? Buffer.from(ownerDeviceHash, 'base64url') : null;
-    const trustedDevice = ownerDevice && approvedDevice && timingSafeEqual(digest(ownerDevice), approvedDevice);
+    const trustedDevice = Boolean(device && approved && timingSafeEqual(digest(device), approved));
     const hashInvite = digest(invite);
     if (trustedDevice || timingSafeEqual(key, hashOwner)) {
+      await initialize();
       switch (data.op) {
         case 'status': return {};
+        case 'sources': case 'source': return sharedSources(data, true);
+        case 'removesource': await db.prepare('DELETE FROM shared_sources WHERE id=?').run(sourceId(data.id)); return {};
         case 'notices': return { notices: await notices() };
         case 'publish':
           await db.prepare('INSERT INTO notices(title,body,created) VALUES(?,?,?)').run(field(data.title, 180), field(data.body, 12000), Date.now());
@@ -47,12 +70,27 @@ export function classroom(db, owner, invite, ownerDeviceHash) {
         default: fail(400, 'العملية غير متاحة.');
       }
     }
-    const device = authorization.match(/^Device ([a-zA-Z0-9_-]{43})$/)?.[1];
-    if (!timingSafeEqual(key, hashInvite) && (!device || device !== data.device)) fail(401, 'تعذّر التحقق من اتصال الطالب.');
-    if (!['sync','suggest'].includes(data.op)) fail(400, 'العملية غير متاحة.');
+    const deviceToken = authorization.match(/^Device ([a-zA-Z0-9_-]{43})$/)?.[1];
+    if (!timingSafeEqual(key, hashInvite) && (!deviceToken || deviceToken !== data.device)) {
+      fail(401, 'تعذّر التحقق من اتصال الطالب.');
+    }
+    if (!['sync','suggest','sources','source','addsource'].includes(data.op)) fail(400, 'العملية غير متاحة.');
     const student = digest(identifier(data.device)).toString('hex');
+    if (['suggest','addsource'].includes(data.op)) await limitSuggestion(student);
+    await initialize();
     await db.prepare('INSERT OR IGNORE INTO students VALUES(?,?,?)').run(student, field(data.name, 100), Date.now());
     switch (data.op) {
+      case 'sources': case 'source': return sharedSources(data, false);
+      case 'addsource': {
+        const image = data.image;
+        if (typeof image !== 'string' || image.length > 550000 ||
+            !/^data:image\/jpeg;base64,\/9j\/[A-Za-z0-9+/]*={0,2}$/.test(image)) fail(400, 'أرسل صورة JPEG صالحة.');
+        const requestId = identifier(data.requestId);
+        const author = await db.prepare('SELECT name FROM students WHERE id=?').get(student);
+        await db.prepare('INSERT OR IGNORE INTO shared_sources(publisher,request_id,subject,title,image,added_by,created) VALUES(?,?,?,?,?,?,?)')
+          .run(student, requestId, field(data.subject, 100), field(data.title, 180), image, author.name, Date.now());
+        return {};
+      }
       case 'sync': return { notices: await notices(), entries: await feedback(student) };
       case 'suggest': {
         const id = digest(student + ':' + identifier(data.requestId)).toString('hex');

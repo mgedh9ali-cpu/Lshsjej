@@ -12,18 +12,21 @@ mkdirSync(dirname(location), { recursive: true, mode: 0o700 });
 const db = new DatabaseSync(location);
 db.exec('PRAGMA journal_mode=WAL;');
 db.exec(readFileSync(new URL('./migrations/0001_classroom.sql', import.meta.url), 'utf8'));
-const handle = classroom(db, owner, invite, process.env.QUM_OWNER_DEVICE_HASH);
+const handle = classroom(db, owner, invite, async () => {}, async () => {}, process.env.QUM_OWNER_DEVICE_HASH);
 const fail = (status, message) => { throw Object.assign(Error(message), { status }); };
 async function readPayload(request) {
   let size = 0;
   const chunks = [];
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 32768) fail(413, 'الطلب كبير جدًا.');
+    if (size > 600000) fail(413, 'الطلب كبير جدًا.');
     chunks.push(chunk);
   }
-  try { return JSON.parse(Buffer.concat(chunks)); }
+  let data;
+  try { data=JSON.parse(Buffer.concat(chunks)); }
   catch { fail(400, 'صيغة الطلب غير صالحة.'); }
+  if(data?.op!=='addsource' && size>32768)fail(413,'الطلب كبير جدًا.');
+  return data;
 }
 const server = createServer({ requestTimeout: 15000, headersTimeout: 8000 }, async (request, response) => {
   const send = (status, data) => {

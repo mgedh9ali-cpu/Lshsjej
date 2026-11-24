@@ -165,7 +165,7 @@ public final class RoomActivity extends Activity {
                 updateStudentNotices(local,null);
             }finally{
                 syncInFlight.set(false);
-                if(foreground&&!syncExecutor.isShutdown())syncTimer.postDelayed(retrySync,12000);
+                if(foreground&&!syncExecutor.isShutdown())syncTimer.postDelayed(retrySync,5000);
             }
         });
     }
@@ -227,7 +227,7 @@ public final class RoomActivity extends Activity {
             JSONObject input;
             try{input=new JSONObject(raw);}catch(JSONException error){return;}
             String operation=input.optString("op");
-            if(operation.equals("ownerEnrollment")||operation.startsWith("online")||
+            if(operation.equals("ownerEnrollment")||operation.startsWith("online")||operation.startsWith("shared")||
                     operation.equals("studentFeedback")||operation.equals("studentSuggest")){
                 syncExecutor.execute(()->{
                     try{
@@ -235,6 +235,13 @@ public final class RoomActivity extends Activity {
                             throw new Exception("سجّل الدخول لربط الصف.");
                         JSONObject result;
                         switch(operation){
+                            case "sharedList":
+                            case "sharedImage":
+                            case "sharedPublish":
+                                String actionName=operation.equals("sharedList")?"sources":operation.equals("sharedImage")?"source":"addsource";
+                                if(owner && operation.equals("sharedPublish"))throw new Exception("النشر المشترك متاح لحساب الطالب.");
+                                result=owner?cloudRequest(input.put("op",actionName)):studentRequest(actionName,input);
+                                break;
                             case "ownerEnrollment":
                                 if(!owner)throw new Exception("العملية للمالك.");
                                 result=RoomStore.obj("code",ownerEnrollmentCode());break;

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
@@ -12,7 +12,10 @@ test('the Worker accepts the existing Android requests and isolates student repl
   const secret = () => randomBytes(32).toString('hex');
   const env = {
     QUM_OWNER_KEY: secret(), QUM_STUDENT_KEY: secret(),
+    STUDENT_RATE: { limit: async () => ({ success: true }) },
+    SUGGESTION_RATE: { limit: async () => ({ success: true }) },
     DB: {
+      batch: async statements => Promise.all(statements.map(statement => statement.run())),
       prepare(sql) {
         const stmt = db.prepare(sql);
         function bind(...args) {
@@ -28,7 +31,7 @@ test('the Worker accepts the existing Android requests and isolates student repl
     },
   };
   const request = (key, data) => new Request('https://class.example/v1/classroom', {
-    method: 'POST', headers: { Authorization: 'Bearer ' + key },
+    method: 'POST', headers: { Authorization: key.includes(' ') ? key : 'Bearer ' + key },
     body: JSON.stringify(data),
   });
   async function send(key, data, status = 200) {
@@ -52,6 +55,24 @@ test('the Worker accepts the existing Android requests and isolates student repl
   const synced = await learner({ op: 'sync', name: 'طالب', device });
   assert.equal(synced.entries[0].reply, 'تمّ.');
   assert.deepEqual((await learner({ op: 'sync', name: 'طالب آخر', device: secret() })).entries, []);
+  const publishingDevice = randomBytes(32).toString('base64url');
+  const ownerDevice = randomBytes(32).toString('base64url');
+  env.QUM_OWNER_DEVICE_HASH = createHash('sha256').update(ownerDevice).digest('base64url');
+  const publication = { op: 'addsource', device: publishingDevice, name: 'طالبة', subject: 'الفيزياء',
+    requestId: secret(), title: 'قانون نيوتن', image: 'data:image/jpeg;base64,/9j/AA==' };
+  await send('Device ' + publishingDevice, publication);
+  await send('Device ' + publishingDevice, publication);
+  const {entries: sources} = await send('OwnerDevice ' + ownerDevice, {op:'sources'});
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0].added_by, 'طالبة');
+  const peer = randomBytes(32).toString('base64url');
+  const peerData = {device:peer,name:'طالب آخر'};
+  const listing = await send('Device ' + peer, {...peerData,op:'sources',subject:'الفيزياء'});
+  assert.equal(listing.entries[0].id, sources[0].id);
+  assert.equal((await send('Device ' + peer, {...peerData,op:'source',id:sources[0].id})).entry.image, publication.image);
+  await send('Device ' + peer, {...peerData,op:'removesource',id:sources[0].id}, 400);
+  await send('OwnerDevice ' + ownerDevice, {op:'removesource',id:sources[0].id});
+  await send('Device ' + peer, {...peerData,op:'source',id:sources[0].id}, 404);
   const oversize = await worker.fetch(request(env.QUM_OWNER_KEY, { op: 'publish', body: 'x'.repeat(33000) }), env);
   assert.equal(oversize.status, 413);
 });
