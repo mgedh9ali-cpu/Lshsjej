@@ -69,7 +69,7 @@ export default {
         }
       }
       const handle = classroom(database(env.DB), env.QUM_OWNER_KEY, env.QUM_STUDENT_KEY, () => initialize(env.DB));
-      return send(await handle(authorization));
+      return send(await handle(authorization, data));
     } catch (error) {
       return send({ error: error.status ? error.message : 'تعذّر تنفيذ الطلب على خدمة الصف.' }, error.status || 500);
     }
