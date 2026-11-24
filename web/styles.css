@@ -120,3 +120,5 @@ button{transition:background-color .16s,border-color .16s,box-shadow .16s,transf
 .simple-login .primary{justify-self:stretch;margin-top:.35rem}
 
 body,body.admin{background:#f3f6f1;color:#183c38} header{background:#fff;border-color:#d9e4dc}.hero p{color:#d9ece7}.field input[type=file]{padding:1rem;border:1px dashed #4e857a}.student nav,.admin nav{gap:.3rem}.student nav button,.admin nav button{border-radius:.7rem}.brand-mark{background:#124d46;color:white}.simple-login h1{background:#164f49}
+
+@media(max-width:400px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.actions,.row{flex-wrap:wrap}.card{min-width:0;overflow-wrap:anywhere}}

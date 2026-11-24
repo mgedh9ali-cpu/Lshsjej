@@ -13,17 +13,19 @@ const action = (label, fn) => {
   const status = el('span', { role: 'status', class: 'message' });
   const control = button(label, async () => {
     control.disabled = true;
-    try { status.textContent = (await fn()) || ''; }
+    status.textContent = 'جارٍ التنفيذ…';
+    try { status.textContent = (await fn()) || 'تم التنفيذ.'; }
     catch (error) { status.textContent = error.message; }
     finally { control.disabled = false; }
   });
   return el('div', { class: 'actions' }, control, status);
 };
-const show = fn => async () => {
+const show = fn => async feedback => {
   const current = ++sequence;
+  app.replaceChildren(el('p', { role: 'status' }, 'جارٍ التحميل…'));
   try {
     const view = await fn();
-    if (sequence === current) app.replaceChildren(...view);
+    if (sequence === current) app.replaceChildren(...view, ...(typeof feedback === 'string' ? [el('p', { role: 'status' }, feedback)] : []));
   } catch (error) { if (sequence === current) errorView(error); }
 };
 const picker = (subjects, optional = false, value = '') => {
@@ -115,6 +117,12 @@ function quizEditor(subjects, quiz) {
     const title = input('question', { ...required, value: question.text });
     const options = area('options', question.options.join('\n'), { rows: 3 });
     const correct = input('correct', { ...required, type: 'number', min: 1, max: 6, value: question.correct + 1 });
+    for (const control of [options, correct]) {
+      control.addEventListener('input', () => {
+        options.setCustomValidity('');
+        correct.setCustomValidity('');
+      });
+    }
     const field = el('fieldset', {}, el('legend', {}, 'سؤال'), line('نص السؤال', title),
       line('الخيارات · سطر لكل خيار', options), line('رقم الخيار الصحيح', correct),
       button('إزالة السؤال', () => field.remove()));
@@ -131,8 +139,24 @@ function quizEditor(subjects, quiz) {
         options: field.querySelector('[name=options]').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean),
         correct: Number(field.querySelector('[name=correct]').value) - 1,
       }));
+      if (!questions.length) throw Error('أضف سؤالًا واحدًا على الأقل.');
+      for (const [index, question] of questions.entries()) {
+        const field = questionList.children[index];
+        const options = field.querySelector('[name=options]');
+        const correct = field.querySelector('[name=correct]');
+        if (question.options.length < 2 || question.options.length > 6) {
+          options.setCustomValidity('أدخل من خيارين إلى ستة خيارات، كل خيار في سطر.');
+          options.reportValidity();
+          return;
+        }
+        if (!Number.isInteger(question.correct) || question.correct < 0 || question.correct >= question.options.length) {
+          correct.setCustomValidity('اختر رقمًا من الخيارات المدخلة.');
+          correct.reportValidity();
+          return;
+        }
+      }
       await api('/quizzes', { ...data, questions, id: quiz?.id });
-      quizzesPage();
+      quizzesPage('تم حفظ مسودة الاختبار.');
     });
 }
 const quizzesPage = show(async () => {

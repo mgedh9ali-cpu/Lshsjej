@@ -10,7 +10,7 @@ function identifier(value) {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{32,64}$/.test(value)) fail(400, 'معرّف العملية غير صالح.');
   return value;
 }
-export function classroom(db, owner, invite, initialize) {
+export function classroom(db, owner, invite, initialize, limitSuggestion = async () => {}) {
   const notices = () => db.prepare('SELECT * FROM notices ORDER BY id DESC LIMIT 100').all();
   const feedback = student => {
     const query = 'SELECT f.id,f.body,f.created,f.reply,s.name FROM feedback f JOIN students s ON s.id=f.student';
@@ -49,8 +49,9 @@ export function classroom(db, owner, invite, initialize) {
       fail(401, 'تعذّر التحقق من اتصال الطالب.');
     }
     if (!['sync','suggest'].includes(data.op)) fail(400, 'العملية غير متاحة.');
-    await initialize();
     const student = digest(identifier(data.device)).toString('hex');
+    if (data.op === 'suggest') await limitSuggestion(student);
+    await initialize();
     await db.prepare('INSERT OR IGNORE INTO students VALUES(?,?,?)').run(student, field(data.name, 100), Date.now());
     switch (data.op) {
       case 'sync': return { notices: await notices(), entries: await feedback(student) };

@@ -1,12 +1,6 @@
 name: Android apps - validate and package
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'cloud/**'
-      - 'wrangler.toml'
-      - '.github/workflows/android-ci.yml'
   workflow_dispatch:
 
 permissions:
@@ -75,7 +69,8 @@ jobs:
           bash android/build.sh dist/QumDorous-Student.apk student
       - name: Build Android owner application
         run: bash android/build.sh dist/QumDorous-Owner.apk owner
-      - name: Publish both APKs as a private pre-release
+      - name: Publish permanently signed APKs as a pre-release
+        if: env.SCHOOL_SIGN_MODE == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

@@ -3,6 +3,7 @@ import { app, nav, el, button, heading, line, api, form, login, temporary, logou
 let page = 0;
 const display = fn => async () => {
   const current = ++page;
+  app.replaceChildren(el('p', { role: 'status' }, 'جارٍ التحميل…'));
   try {
     const content = await fn(current);
     if (current === page) app.replaceChildren(...content.filter(Boolean));
