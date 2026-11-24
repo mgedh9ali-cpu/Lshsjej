@@ -30,7 +30,7 @@ test('the student password stays local and classroom traffic uses HTTPS', () => 
   assert.match(script, /rpc\(hasAccount\?'unlock':'register',data\)/);
   assert.doesNotMatch(script, /شبكة الواي فاي/);
   const bridge = read('android/src/school/dafaa/RoomActivity.java');
-  assert.match(bridge, /put\("device",device\)\.put\("name",localData\(\)\.getString\("name",""\)\)/);
+  assert.match(bridge, /studentRequest\("register",RoomStore\.obj\("name",name,"email",email\)\)/);
   assert.match(bridge, /note_\s*"\+index/);
   assert.match(bridge, /putString\("outbox",queue\.toString\(\)\)\.commit\(\)/);
   assert.match(read('android/src/school/dafaa/CloudClass.java'), /HttpsURLConnection/);
@@ -86,10 +86,10 @@ test('the student inbox keeps received notices visible offline', async () => {
   const requests = [];
   const env = {
     $: () => list, window: {}, date: String, el: (_tag, text) => text,
-    wrap: (_class, ...items) => items, online: true,
+    wrap: (_class, ...items) => items, online: true, studentEmail: 'student@example.com',
     rpc: async (op, options) => {
       requests.push([op, options.refresh]);
-      return { notices: [notice], online: env.online };
+      return { notices: [notice], online: env.online, blocked: env.blocked };
     },
   };
   await runInNewContext(script.slice(start, end) + '\nrefreshStudentNotices(true);', env);
@@ -99,6 +99,9 @@ test('the student inbox keeps received notices visible offline', async () => {
   assert.match(list.children[0], /المحفوظة على الهاتف/);
   assert.deepEqual(Array.from(list.children[1]), ['0', notice.title, notice.body]);
   assert.deepEqual(requests, [['studentNotices', true], ['studentNotices', false]]);
+  env.blocked = 'هذا البريد محظور من الصف.';
+  await runInNewContext('refreshStudentNotices();', env);
+  assert.deepEqual(list.children, [env.blocked]);
 });
 
 test('source images are published without text extraction', () => {

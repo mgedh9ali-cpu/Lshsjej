@@ -263,6 +263,7 @@ pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 
 img { display: block; max-width: 100%; height: auto; border-radius: 12px; }
 .legacy-sources { display: grid; gap: 8px; }
 .registration-list { display: grid; gap: 8px; }
+.registration-list button.danger { color: #a62626; }
 .legacy-sources article {
   padding: 12px;
   background: var(--surface);

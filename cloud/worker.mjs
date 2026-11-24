@@ -1,7 +1,8 @@
-import { classroom } from './classroom.mjs';
+import { classroom, registrationSchema } from './classroom.mjs';
 
-let initialized = false;
+const initialized = new WeakSet();
 const schema = [
+  ...registrationSchema,
   "CREATE TABLE IF NOT EXISTS shared_sources (id INTEGER PRIMARY KEY AUTOINCREMENT, publisher TEXT NOT NULL, request_id TEXT NOT NULL, subject TEXT NOT NULL, title TEXT NOT NULL, image TEXT NOT NULL, added_by TEXT NOT NULL, created INTEGER NOT NULL, UNIQUE(publisher,request_id));",
   "CREATE INDEX IF NOT EXISTS shared_sources_subject_id ON shared_sources(subject,id DESC);",
   'CREATE TABLE IF NOT EXISTS students (id TEXT PRIMARY KEY, name TEXT NOT NULL, created INTEGER NOT NULL);',
@@ -11,9 +12,9 @@ const schema = [
 ];
 
 async function initialize(binding) {
-  if (initialized) return;
+  if (initialized.has(binding)) return;
   await binding.batch(schema.map(sql => binding.prepare(sql)));
-  initialized = true;
+  initialized.add(binding);
 }
 
 function database(binding) {
@@ -65,7 +66,7 @@ export default {
       if (!data || typeof data !== 'object' || Array.isArray(data)) return send({ error: 'صيغة الطلب غير صالحة.' }, 400);
       const authorization = request.headers.get('Authorization') || '';
       if (!env.DB || !env.STUDENT_RATE || !env.SUGGESTION_RATE) return send({error:'الربط عبر الإنترنت قيد الإعداد.'}, 503);
-      if (['sync', 'suggest', 'addsource'].includes(data.op)) {
+      if (['register', 'sync', 'suggest', 'addsource', 'sources', 'source'].includes(data.op)) {
         const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
         const allowed = await env.STUDENT_RATE.limit({ key: ip });
         if (!allowed.success) {

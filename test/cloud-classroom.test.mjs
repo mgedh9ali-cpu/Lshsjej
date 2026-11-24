@@ -38,12 +38,12 @@ test('the owner and students exchange durable updates between separate sessions'
     assert.equal(reply.status, status);
     return reply.json();
   }
-  const student = { name: 'طالب أول', device: secret() };
-  const other = { name: 'طالب ثانٍ', device: secret() };
+  const student = { name: 'طالب أول', email: 'first@example.com', device: secret() };
+  const other = { name: 'طالب ثانٍ', email: 'second@example.com', device: secret() };
   const requestId = secret();
   await call(invite, { ...student, op: 'publish' }, 400);
   await call('wrong key', { op: 'notices' }, 401);
-  await call(invite, { ...student, op: 'sync' });
+  await call(invite, { ...student, op: 'register' });
   await call(owner, { op: 'publish', title: 'موعد الحصة', body: 'غدًا' });
   const suggestion = { ...student, op: 'suggest', body: 'أضيفوا أسئلة', requestId };
   await call(invite, suggestion);
@@ -56,6 +56,14 @@ test('the owner and students exchange durable updates between separate sessions'
   const synced = await call(invite, { ...student, op: 'sync' });
   assert.equal(synced.notices[0].title, 'موعد الحصة');
   assert.equal(synced.entries[0].reply, 'تمت الإضافة');
+  await call(invite, { ...other, op: 'register' });
   assert.deepEqual((await call(invite, { ...other, op: 'sync' })).entries, []);
   assert.equal((await call(owner, { op: 'registrations' })).total, 2);
+  await call(owner, { op: 'blockemail', email: student.email });
+  await stop();
+  origin = await launch();
+  await call(invite, { ...student, op: 'sync' }, 403);
+  await call(invite, { op: 'register', name: student.name, device: secret(), email: 'FIRST@example.com' }, 403);
+  await call(owner, { op: 'unblockemail', email: student.email });
+  assert.equal((await call(invite, { ...student, op: 'sync' })).entries.length, 1);
 });

@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { classroom } from './classroom.mjs';
+import { classroom, registrationSchema } from './classroom.mjs';
 
 const owner = process.env.QUM_OWNER_KEY || '';
 const invite = process.env.QUM_STUDENT_KEY || '';
@@ -12,6 +12,7 @@ mkdirSync(dirname(location), { recursive: true, mode: 0o700 });
 const db = new DatabaseSync(location);
 db.exec('PRAGMA journal_mode=WAL;');
 db.exec(readFileSync(new URL('./migrations/0001_classroom.sql', import.meta.url), 'utf8'));
+db.exec(registrationSchema.join(';'));
 const handle = classroom(db, owner, invite, async () => {}, async () => {}, process.env.QUM_OWNER_DEVICE_HASH);
 const fail = (status, message) => { throw Object.assign(Error(message), { status }); };
 async function readPayload(request) {

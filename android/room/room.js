@@ -2,7 +2,7 @@
 const $=sel=>document.querySelector(sel);
 const main=$('main'), bottomNav=$('#bottom-nav'), pending=new Map();
 let serial=0,revision=0,page='login',name='',owner=false,setup=false,cache,selected,hideTimer;
-let offline=false,hasAccount=false,locked=false,previewUrl=null,cloudUrl='';
+let offline=false,hasAccount=false,locked=false,previewUrl=null,cloudUrl='',studentEmail='';
 function rpc(op,data={}){
   if(offline && ['home','subject','source','addSource'].includes(op))return offlineData(op,data);
   const id=++serial;
@@ -31,6 +31,7 @@ function tile(title,detail,symbol,fn){
 function field(label,key,type='text',value=''){
   const l=el('label',label,'field'),n=el(type==='textarea'?'textarea':'input');
   if(type!=='textarea')n.type=type;else n.rows=3;
+  if(type==='email'){n.dir='ltr';n.maxLength=254;n.autocomplete='email';n.spellcheck=false;}
   n.name=key;n.value=value;if(type==='textarea')n.defaultValue=value;n.required=true;l.append(n);return l;
 }
 function form(title,fields,label,fn){
@@ -98,19 +99,19 @@ bottomNav.addEventListener('keydown',event=>{
 async function boot(){
   const state=await rpc('boot');
   owner=state.owner;setup=state.setup;hasAccount=state.hasAccount;locked=state.locked;offline=!owner;
-  cloudUrl=state.cloudUrl||'';
+  cloudUrl=state.cloudUrl||'';studentEmail=state.email||'';
   if(owner&&state.savedSession){
     try{name=(await rpc('resume')).name;}
     catch(err){message(err.message);}
   }else if(!owner)name=state.studentName||'';
-  await go(locked&&!owner?'unlock':owner&&!name?'login':'home');
+  await go(owner?(!name?'login':'home'):locked?'unlock':studentEmail?'home':'linkEmail');
 }
 async function go(next,item,focusPage=false){
   if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
   page=next;const mine=++revision;
   if(item&&(next==='subject'||next==='newSource'))selected=item;
   navigation();
-  const pages={unlock,login,home,feed,feedback,accounts,settings,notes,subject,newSource,source,quiz,sharedAll};
+  const pages={unlock,linkEmail,login,home,feed,feedback,accounts,settings,notes,subject,newSource,source,quiz,sharedAll};
   try{
     if((name||offline)&&['home','feed','feedback','accounts','settings','subject'].includes(next))cache=await rpc('home');
     if(mine!==revision)return;
@@ -139,15 +140,28 @@ function login(){
   })];
 }
 function unlock(){
+  const identity=hasAccount&&studentEmail
+    ? field('البريد الإلكتروني','email','email',studentEmail)
+    : field('الاسم','name','text',name);
   return [hero('قوم دروس','حساب الطالب على هذا الهاتف'),
-    !hasAccount&&el('p','تبقى كلمة السر على هاتفك. عند توفر الإنترنت، يُرسل اسمك تلقائيًا إلى لوحة المالك.','empty-state'),
+    !hasAccount&&el('p','يحتاج التسجيل إلى اتصال بالإنترنت. يظهر اسمك وبريدك للمالك، وتبقى كلمة السر على هاتفك.','empty-state'),
     form(hasAccount?'تسجيل الدخول':'إنشاء حساب الطالب',[
-      field('الاسم','name','text',name),field('كلمة السر · ٦ أحرف على الأقل','password','password')
+      identity,...(!hasAccount?[field('البريد الإلكتروني','email','email')]:[]),
+      field('كلمة السر · ٦ أحرف على الأقل','password','password')
     ],hasAccount?'دخول':'تسجيل',async data=>{
-      name=(await rpc(hasAccount?'unlock':'register',data)).name;
+      const account=await rpc(hasAccount?'unlock':'register',data);
+      name=account.name;studentEmail=account.email;
       locked=false;hasAccount=true;
-      await go('home');
+      await go(studentEmail?'home':'linkEmail');
     })];
+}
+function linkEmail(){
+  return [hero('ربط البريد الإلكتروني','حساب الطالب'),
+    el('p','أضف بريدك لاستخدام إشعارات الصف واقتراحاته ومنشوراته. يظهر البريد في لوحة المالك.','empty-state'),
+    form('',[field('البريد الإلكتروني','email','email')],'ربط البريد',async data=>{
+      studentEmail=(await rpc('linkEmail',data)).email;
+      await go('home');
+    }),button('لاحقًا',()=>go('home'))];
 }
 const symbols=['ϟ','⚗','✿','Aa','∑'];
 const number=new Intl.NumberFormat('ar-SY');
@@ -175,8 +189,10 @@ function noticeCards(notices){
 async function refreshStudentNotices(refresh=false){
   const list=$('#student-notices');
   if(!list)return;
-  const {notices,online,configured}=await rpc('studentNotices',{refresh});
+  const {notices,online,configured,blocked}=await rpc('studentNotices',{refresh});
   if(!list.isConnected)return;
+  if(blocked){list.replaceChildren(el('p',blocked,'empty-state'));return;}
+  if(!studentEmail){list.replaceChildren(button('ربط البريد الإلكتروني',()=>go('linkEmail')));return;}
   const status=online?(notices.length?'':'لا توجد إشعارات بعد.')
     :notices.length?'تعذّر الوصول إلى لوحة المالك. هذه الإشعارات المحفوظة على الهاتف.'
     :configured?'بانتظار الاتصال بخادم الصف. تظهر التحديثات عند عودة الإنترنت.':'اربط الصف عبر الإنترنت من الإعدادات لاستقبال الإشعارات.';
@@ -201,6 +217,8 @@ function feedbackCard(entry){
     ...(entry.reply?[el('pre',entry.reply)]:[]));
 }
 function showStudentFeedback(list,result){
+  if(result.blocked){list.replaceChildren(el('p',result.blocked,'empty-state'));return;}
+  if(!studentEmail){list.replaceChildren(button('ربط البريد الإلكتروني',()=>go('linkEmail')));return;}
   const entries=result.entries.map(feedbackCard);
   const pending=result.pending.map(item=>wrap('card',el('small',date(item.created)),
     el('pre',item.body),el('strong','بانتظار الإرسال')));
@@ -265,7 +283,21 @@ async function feedback(){
 const dateTime=v=>new Intl.DateTimeFormat('ar-SY',{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}).format(v);
 function updateRegistrationList(container, data){
   container.replaceChildren(el('small',number.format(data.total)+' تسجيل'),
-    ...data.entries.map(entry=>wrap('card',el('strong',entry.name),el('small','تم التسجيل · '+dateTime(entry.created)))),
+    ...data.entries.map(entry=>{
+      const email=el('p',entry.email||'البريد غير مربوط');
+      if(entry.email)email.dir='ltr';
+      const card=wrap('card',el('strong',entry.name),email,el('small','تم التسجيل · '+dateTime(entry.created)));
+      if(entry.email){
+        const blocked=Boolean(entry.blocked);
+        card.append(el('small',blocked?'محظور':'مسموح له باستخدام الصف'),
+          button(blocked?'رفع الحظر':'حظر البريد',async()=>{
+            if(!blocked&&!confirm('حظر '+entry.email+' من الصف على جميع أجهزته؟'))return;
+            await rpc(blocked?'onlineUnblockEmail':'onlineBlockEmail',{email:entry.email});
+            await go('accounts');
+          },blocked?'':'danger'));
+      }
+      return card;
+    }),
     ...(!data.entries.length?[el('p','تظهر هنا أسماء الطلاب بعد ربط الصف.','empty-state')]:[]));
 }
 async function refreshRegistrations(container){
@@ -338,6 +370,7 @@ function settings(){
     });
   }
   return [hero('الإعدادات',name||'قوم دروس'),enrollment,
+    offline&&!studentEmail&&button('ربط البريد الإلكتروني',()=>go('linkEmail')),
     offline&&button('ملاحظاتي',()=>go('notes')),
     owner&&wrap('card',el('h2','النسخ الاحتياطي المشفّر'),
       el('p','احفظ نسخة من بيانات هذه اللوحة على الهاتف. لبيانات الصف عبر الإنترنت نسخة احتياطية تُؤخذ من الخادم.'),

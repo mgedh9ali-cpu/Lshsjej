@@ -36,6 +36,10 @@ final class CloudClass {
         Unauthorized(String message) { super(message); }
     }
 
+    static final class Blocked extends Exception {
+        Blocked(String message) { super(message); }
+    }
+
     static JSONObject ownerDevice(String origin, String device, JSONObject payload) throws Exception {
         return request(origin, "OwnerDevice " + device, payload);
     }
@@ -67,6 +71,8 @@ final class CloudClass {
                 JSONObject result = new JSONObject(new String(body.toByteArray(), StandardCharsets.UTF_8));
                 if (status == 401)
                     throw new Unauthorized(result.optString("error", "تعذّر التحقق من الاتصال."));
+                if (status == 403)
+                    throw new Blocked(result.optString("error", "هذا البريد محظور من الصف."));
                 if (status != 200) throw new Exception(result.optString("error", "استجابة غير صالحة من خادم الصف."));
                 return result;
             }
