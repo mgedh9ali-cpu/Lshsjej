@@ -185,6 +185,12 @@ public final class RoomActivity extends Activity {
         });
     }
 
+    private static byte[] localHash(char[] password, byte[] salt) throws Exception {
+        javax.crypto.spec.PBEKeySpec spec = new javax.crypto.spec.PBEKeySpec(password, salt, 210000, 256);
+        try { return javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1").generateSecret(spec).getEncoded(); }
+        finally { spec.clearPassword(); java.util.Arrays.fill(password, '\0'); }
+    }
+
     private Object studentAccount(String op,JSONObject p)throws Exception{
         SharedPreferences local=localData();
         String name=RoomStore.check(p,"name",100);
@@ -197,12 +203,12 @@ public final class RoomActivity extends Activity {
             byte[] salt=new byte[16];
             new java.security.SecureRandom().nextBytes(salt);
             edit.putString("name",name).putString("salt",android.util.Base64.encodeToString(salt,2))
-                .putString("hash",android.util.Base64.encodeToString(MainActivity.localHash(password.toCharArray(),salt),2));
+                .putString("hash",android.util.Base64.encodeToString(localHash(password.toCharArray(),salt),2));
         }else{
             byte[] salt=android.util.Base64.decode(local.getString("salt",""),0);
             byte[] digest=android.util.Base64.decode(local.getString("hash",""),0);
             if(!local.contains("hash")||!local.getString("name","").equals(name)||
-                !java.security.MessageDigest.isEqual(digest,MainActivity.localHash(password.toCharArray(),salt)))
+                !java.security.MessageDigest.isEqual(digest,localHash(password.toCharArray(),salt)))
                 throw new Exception("الاسم أو كلمة السر غير صحيحة.");
         }
         if(!edit.putBoolean("remembered",true).commit())throw new Exception("تعذّر حفظ الحساب على الهاتف.");
@@ -271,9 +277,6 @@ public final class RoomActivity extends Activity {
                             "cloudUrl",cloud().getString("url",CloudClass.DEFAULT_ORIGIN),
                             "locked",!owner&&!local.getBoolean("remembered",false),
                             "setup",owner&&((JSONObject)store.handle(true,"device",RoomStore.obj("op","status"))).optBoolean("setup"));
-                    }else if(!owner&&op.equals("lock")){
-                        localData().edit().putBoolean("remembered",false).apply();
-                        value=RoomStore.obj();
                     }else if(!owner&&(op.equals("register")||op.equals("unlock"))){
                         value=studentAccount(op,p);
                     }else if(!owner&&op.equals("studentNotices")){

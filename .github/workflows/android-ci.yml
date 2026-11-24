@@ -27,7 +27,6 @@ jobs:
         run: |
           node --check android/room/room.js
           node --check android/room/library.js
-          node --check android/offline/source.js
           bash -n android/build.sh
       - name: Test Android packaging configuration
         run: npm test
@@ -50,44 +49,42 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/signing"
           export SCHOOL_KEYSTORE="$RUNNER_TEMP/signing/school.keystore"
-          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
-            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$SCHOOL_KEYSTORE"
-            printf 'SCHOOL_SIGN_MODE=release\n' >> "$GITHUB_ENV"
-            printf 'SCHOOL_KEY_PASSWORD=%s\n' "$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
-          else
-            keytool -genkeypair -keystore "$SCHOOL_KEYSTORE" -storepass androidtest -keypass androidtest \
-              -alias dafaa -keyalg RSA -keysize 3072 -validity 1000 -dname "CN=Qum Dorous Preview"
-            printf 'SCHOOL_SIGN_MODE=preview\n' >> "$GITHUB_ENV"
-            printf 'SCHOOL_KEY_PASSWORD=androidtest\n' >> "$GITHUB_ENV"
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::Configure the permanent Android signing key before building a release."
+            exit 1
           fi
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$SCHOOL_KEYSTORE"
+          keytool -list -keystore "$SCHOOL_KEYSTORE" -storepass:env KEYSTORE_PASSWORD -alias dafaa > /dev/null
+          printf 'SCHOOL_KEY_PASSWORD=%s\n' "$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
           printf 'SCHOOL_KEYSTORE=%s\n' "$SCHOOL_KEYSTORE" >> "$GITHUB_ENV"
           printf 'SCHOOL_KEY_ALIAS=dafaa\n' >> "$GITHUB_ENV"
       - name: Build Android student application
         run: |
           mkdir -p dist
-          bash android/build.sh dist/QumDorous-Student-0.7.8.apk student
+          bash android/build.sh dist/QumDorous-Student-0.7.9.apk student
       - name: Build Android owner application
-        run: bash android/build.sh dist/QumDorous-Owner-0.7.8.apk owner
+        run: bash android/build.sh dist/QumDorous-Owner-0.7.9.apk owner
       - name: Verify Android packages
         run: |
           build_tools="$ANDROID_SDK_ROOT/build-tools/35.0.0"
           for edition in Student Owner; do
-            apk="dist/QumDorous-$edition-0.7.8.apk"
+            apk="dist/QumDorous-$edition-0.7.9.apk"
             "$build_tools/apksigner" verify --verbose --print-certs "$apk"
             package=school.dafaa
             [[ "$edition" != Owner ]] || package=school.dafaa.owner
             "$build_tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/apk-badging.txt"
-            grep -F "package: name='$package' versionCode='21' versionName='0.7.8'" "$RUNNER_TEMP/apk-badging.txt"
+            grep -F "package: name='$package' versionCode='22' versionName='0.7.9'" "$RUNNER_TEMP/apk-badging.txt"
             unzip -Z1 "$apk" > "$RUNNER_TEMP/apk-files.txt"
-            for asset in room.html room.js room.css student.sqlite cairo.woff2; do
+            for asset in room.html room.js room.css cairo.woff2; do
               grep -Fx "assets/$asset" "$RUNNER_TEMP/apk-files.txt"
             done
-            if grep -Ex 'assets/(student-origin.txt|admin.html|student.html|ocr-worker.js|core.js|models.js)' "$RUNNER_TEMP/apk-files.txt"; then exit 1; fi
+            if grep -Ex 'assets/(student-origin.txt|admin.html|student.html|ocr-worker.js|core.js|models.js|source.html|source.js|student.sqlite)' "$RUNNER_TEMP/apk-files.txt"; then exit 1; fi
           done
           sha256sum dist/*.apk > dist/SHA256SUMS.txt
       - name: Save both APKs as build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: QumDorous-Android-0.7.8-${{ env.SCHOOL_SIGN_MODE }}
+          name: QumDorous-Android-0.7.9-release
           path: dist/
           if-no-files-found: error

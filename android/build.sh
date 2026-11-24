@@ -20,7 +20,7 @@ temp="$(mktemp -d)"
 trap 'rm -rf "$temp"' EXIT
 mkdir -p "$temp/classes" "$temp/dex" "$temp/assets" "$(dirname "$output")"
 "$bt/aapt2" compile --dir "$root/android/res" -o "$temp/resources.zip"
-cp "$root"/android/offline/source.html "$root"/android/offline/source.js "$root"/android/room/* "$temp/assets/"
+cp "$root"/android/room/* "$temp/assets/"
 cp "$root"/android/assets/* "$temp/assets/"
 font_dir="${SCHOOL_FONT_DIR:-$root/android/fonts}"
 if [[ -f "$font_dir/thmanyahsans-Regular.woff2" && -f "$font_dir/thmanyahsans-Bold.woff2" ]]; then
@@ -33,7 +33,6 @@ else
   fi
   printf '%s\n' 'Thmanyah font assets not found: using Cairo fallback until both licensed WOFF2 files are supplied.' >&2
 fi
-node "$root/scripts/build-student-db.mjs" "$temp/assets/student.sqlite"
 "$bt/aapt2" link -A "$temp/assets" -I "$platform" --manifest "$manifest" -o "$temp/base.apk" "$temp/resources.zip"
 "$jdk/bin/javac" --release 8 -cp "$platform" -d "$temp/classes" "$root"/android/src/school/dafaa/*.java
 "$jdk/bin/jar" cf "$temp/classes.jar" -C "$temp/classes" .
