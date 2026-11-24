@@ -1,0 +1,10 @@
+name = "lshsjej"
+main = "cloud/worker.mjs"
+compatibility_date = "2026-11-24"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "qum-dorous"
+database_id = "123d5d0c-1fff-45c4-b834-352be7dbb307"

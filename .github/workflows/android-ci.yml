@@ -3,6 +3,10 @@ name: Android apps - validate and package
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'cloud/**'
+      - 'wrangler.toml'
+      - '.github/workflows/android-ci.yml'
   workflow_dispatch:
 
 permissions:
