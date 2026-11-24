@@ -40,14 +40,6 @@ final class CloudClass {
         return request(origin, "OwnerDevice " + device, payload);
     }
 
-    static JSONObject ownerSession(String origin, String session, JSONObject payload) throws Exception {
-        return request(origin, "OwnerSession " + session, payload);
-    }
-
-    static JSONObject ownerLogin(String origin, String password) throws Exception {
-        return request(origin, "", new JSONObject().put("op","ownerlogin").put("password",password));
-    }
-
     interface Progress { void written(int bytes, int total); }
 
     static JSONObject upload(String origin, String authorization, JSONObject payload, Progress progress)throws Exception{

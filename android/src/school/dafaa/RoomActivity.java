@@ -31,7 +31,7 @@ public final class RoomActivity extends Activity {
         if(android.os.Build.VERSION.SDK_INT>=30)getWindow().setDecorFitsSystemWindows(false);
         owner="school.dafaa.owner".equals(getPackageName());
         base=owner?"https://room.invalid/":"https://classroom.invalid/";
-        if(owner)store=new RoomStore(this);
+        if(owner){store=new RoomStore(this);cloud().edit().remove("owner_session").apply();}
         token=getPreferences(MODE_PRIVATE).getString(owner?"ownerToken":"studentToken","");
 
         web=new WebView(this);web.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
@@ -93,16 +93,15 @@ public final class RoomActivity extends Activity {
         SharedPreferences config=cloud();
         String origin=owner?CloudClass.DEFAULT_ORIGIN:config.getString("url",CloudClass.DEFAULT_ORIGIN);
         if(!owner)return CloudClass.call(origin,config.getString("key",""),payload);
-        String session=config.getString("owner_session","");
-        if(!session.isEmpty()){
-            try{
-                return progress==null?CloudClass.ownerSession(origin,session,payload):
-                    CloudClass.upload(origin,"OwnerSession "+session,payload,progress);
-            }catch(CloudClass.Unauthorized denied){
-                config.edit().remove("owner_session").apply();
-            }
+        String device=config.getString("owner_device","");
+        if(device.isEmpty())
+            throw new Exception("اتصال المالك غير متاح على هذا الهاتف.");
+        try{
+            return progress==null?CloudClass.ownerDevice(origin,device,payload):
+                CloudClass.upload(origin,"OwnerDevice "+device,payload,progress);
+        }catch(CloudClass.Unauthorized denied){
+            throw new Exception("اتصال المالك غير متاح على هذا الهاتف.");
         }
-        throw new Exception("افتح الإعدادات وسجّل الدخول إلى حساب المالك.");
     }
 
     private JSONObject studentRequest(String op,JSONObject data)throws Exception{
@@ -224,7 +223,7 @@ public final class RoomActivity extends Activity {
             JSONObject input;
             try{input=new JSONObject(raw);}catch(JSONException error){return;}
             String operation=input.optString("op");
-            if(operation.equals("ownerCloudLogin")||operation.startsWith("online")||operation.startsWith("shared")||
+            if(operation.startsWith("online")||operation.startsWith("shared")||
                     operation.equals("studentFeedback")||operation.equals("studentSuggest")){
                 syncExecutor.execute(()->{
                     try{
@@ -259,12 +258,6 @@ public final class RoomActivity extends Activity {
                                     result=RoomStore.obj();
                                 }
                                 break;
-                            case "ownerCloudLogin":
-                                if(!owner)throw new Exception("العملية للمالك.");
-                                String session=CloudClass.ownerLogin(CloudClass.DEFAULT_ORIGIN,RoomStore.check(input,"password",128)).getString("session");
-                                if(!cloud().edit().putString("owner_session",session).commit())
-                                    throw new Exception("تعذّر حفظ جلسة المالك.");
-                                result=RoomStore.obj();break;
                             case "studentFeedback":
                                 if(owner)throw new Exception("العملية للطالب.");
                                 if(input.optBoolean("refresh")){
@@ -365,7 +358,7 @@ public final class RoomActivity extends Activity {
                         if(op.equals("login")||op.equals("setup")){
                             token=((JSONObject)value).getString("token");
                             getPreferences(MODE_PRIVATE).edit().putString(owner?"ownerToken":"studentToken",token).putString(owner?"ownerName":"studentName",((JSONObject)value).getString("name")).apply();((JSONObject)value).remove("token");
-                        }else if(op.equals("logout")){cloud().edit().remove("owner_session").apply();
+                        }else if(op.equals("logout")){
                             token="";
                             getPreferences(MODE_PRIVATE).edit().remove(owner?"ownerToken":"studentToken").remove(owner?"ownerName":"studentName").apply();
                         }

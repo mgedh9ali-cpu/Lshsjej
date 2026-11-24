@@ -67,7 +67,7 @@ export default {
       if (!data || typeof data !== 'object' || Array.isArray(data)) return send({ error: 'صيغة الطلب غير صالحة.' }, 400);
       const authorization = request.headers.get('Authorization') || '';
       if (!env.DB || !env.STUDENT_RATE || !env.SUGGESTION_RATE) return send({error:'الربط عبر الإنترنت قيد الإعداد.'}, 503);
-      if (['sync', 'suggest', 'addsource', 'ownerlogin'].includes(data.op)) {
+      if (['sync', 'suggest', 'addsource'].includes(data.op)) {
         const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
         const allowed = await env.STUDENT_RATE.limit({ key: ip });
         if (!allowed.success) {
@@ -77,7 +77,7 @@ export default {
       const handle = classroom(database(env.DB), env.QUM_OWNER_KEY, env.QUM_STUDENT_KEY, () => initialize(env.DB), async student => {
         const allowed = await env.SUGGESTION_RATE.limit({ key: student });
         if (!allowed.success) throw Object.assign(Error('انتظر قليلًا ثم حاول مجددًا.'), { status: 429 });
-      }, env.QUM_OWNER_DEVICE_HASH, env.QUM_OWNER_PASSWORD_HASH);
+      }, env.QUM_OWNER_DEVICE_HASH);
       return send(await handle(authorization, data));
     } catch (error) {
       return send({ error: error.status ? error.message : 'تعذّر تنفيذ الطلب على خدمة الصف.' }, error.status || 500);

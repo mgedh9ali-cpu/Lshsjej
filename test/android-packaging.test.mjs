@@ -13,8 +13,8 @@ test('ships separate student and owner launchers without the hosted web app', ()
     const source = read('android/' + manifest);
     assert.ok(source.includes('package="' + id + '"'));
     assert.ok(source.includes('android:name="' + activity + '"'));
-    assert.match(source, /android:versionCode="25"/);
-    assert.match(source, /android:versionName="0\.8\.2"/);
+    assert.match(source, /android:versionCode="26"/);
+    assert.match(source, /android:versionName="0\.8\.3"/);
     assert.match(source, /android:usesCleartextTraffic="false"/);
     assert.doesNotMatch(source, /android.intent.category.BROWSABLE/);
   }

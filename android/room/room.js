@@ -76,7 +76,7 @@ function navigation(){
       const entry=button('',()=>go(key,undefined,true),'bottom-tab');
       entry.dataset.page=key;
       entry.setAttribute('aria-label',label);
-      entry.append(navIcon(key),el('span',label,'bottom-tab-label'));
+      entry.append(navIcon(key),el('span',key==='home'&&owner?'الصف':label,'bottom-tab-label'));
       return entry;
     }));
   }
@@ -132,7 +132,7 @@ async function go(next,item,focusPage=false){
   }catch(err){
     if(mine!==revision)return;
     if(err.message.includes('انتهت الجلسة')){name='';await go(owner?'login':'unlock');return;}
-    main.replaceChildren(hero('تعذّر فتح الصفحة',err.message),button('إعادة المحاولة',()=>go(next,item)),...(owner&&err.message.includes('حساب المالك')?[button('دخول المالك',()=>go('settings'),'primary')]:[]),button('العودة',()=>go(owner&&!name?'login':!owner&&locked?'unlock':'home')));
+    main.replaceChildren(hero('تعذّر فتح الصفحة',err.message),button('إعادة المحاولة',()=>go(next,item)),button('العودة',()=>go(owner&&!name?'login':!owner&&locked?'unlock':'home')));
   }
 }
 function login(){
@@ -320,20 +320,16 @@ function settings(){
   theme.value=localStorage.getItem('qum-theme')||'system';
   theme.onchange=()=>{localStorage.setItem('qum-theme',theme.value);applyTheme(theme.value);};
   const appearance=wrap('card',el('h2','المظهر'),wrap('field',el('span','ألوان التطبيق'),theme));
-  const connection=owner?wrap('card',el('h2','حساب المالك عبر الإنترنت')):null;
+  const connection=owner?wrap('card',el('h2','اتصال لوحة المالك')):null;
   if(connection){
     const status=el('p','جارٍ فحص الاتصال…');
-    connection.append(status);
-    const login=form('',[field('كلمة المرور الرئيسية','password','password')],'تسجيل الدخول',async data=>{
-      await rpc('ownerCloudLogin',data);
-      message('تم تسجيل الدخول إلى الصف.');
-      await go('settings');
-    });
-    login.querySelector('input').autocomplete='current-password';
-    rpc('onlineStatus').then(()=>{status.textContent='متصل بالصف عبر الإنترنت.';}).catch(error=>{
-      status.textContent=error.message;
-      connection.append(login);
-    });
+    const refresh=async()=>{
+      status.textContent='جارٍ فحص الاتصال…';
+      try{await rpc('onlineStatus');status.textContent='متصل بالصف عبر الإنترنت.';}
+      catch(error){status.textContent=error.message;}
+    };
+    connection.append(status,button('فحص الاتصال',refresh));
+    refresh();
   }
   return [hero('الإعدادات',''),appearance,connection,
     owner&&button('تسجيل الخروج',async()=>{await rpc('logout');name='';await go('login');})];
