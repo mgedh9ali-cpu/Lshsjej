@@ -2,7 +2,8 @@ const headers = {
   'Content-Type': 'text/html; charset=utf-8',
   'Cache-Control': 'no-store',
   'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-  'Referrer-Policy': 'no-referrer',
+  // Form submissions need an Origin header; only send referrers within this origin.
+  'Referrer-Policy': 'same-origin',
   'X-Content-Type-Options': 'nosniff',
 };
 const escape = text => String(text).replace(/[&<>"']/g, c => ({
