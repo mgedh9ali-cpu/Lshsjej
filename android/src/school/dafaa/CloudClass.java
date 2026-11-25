@@ -32,6 +32,11 @@ final class CloudClass {
         return request(DEFAULT_ORIGIN, "Device " + device, payload);
     }
 
+    static JSONObject enroll(String invite, JSONObject payload) throws Exception {
+        if (!invite.matches("[a-zA-Z0-9_-]{43}")) throw new Exception("أدخل رمز الدعوة الكامل من المالك.");
+        return request(DEFAULT_ORIGIN, "Invite " + invite, payload);
+    }
+
     static final class Unauthorized extends Exception {
         Unauthorized(String message) { super(message); }
     }

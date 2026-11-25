@@ -114,18 +114,21 @@ public final class RoomActivity extends Activity {
         return CloudClass.call(origin,key,payload);
     }
 
-    private JSONObject studentRequest(String op,JSONObject data)throws Exception{
+    private synchronized String studentDevice() throws Exception {
         SharedPreferences config=cloud();
         String device=config.getString("device","");
         if(device.isEmpty()){
             device=RoomStore.random(32);
             if(!config.edit().putString("device",device).commit())throw new Exception("تعذّر حفظ اتصال الصف.");
         }
+        return device;
+    }
+
+    private JSONObject studentRequest(String op,JSONObject data)throws Exception{
+        String device=studentDevice();
         JSONObject request=data.put("op",op).put("device",device);
-        String savedUrl=config.getString("url","");
         try {
-            JSONObject response = !savedUrl.isEmpty() && !savedUrl.equals(CloudClass.DEFAULT_ORIGIN)
-                ? cloudRequest(request) : CloudClass.student(device,request);
+            JSONObject response = CloudClass.student(device,request);
             setClassroomBlock("");
             return response;
         } catch (CloudClass.Blocked error) {
@@ -144,8 +147,9 @@ public final class RoomActivity extends Activity {
     }
 
     private String linkStudentEmail(String name, JSONObject input)throws Exception {
-        String email = RoomStore.check(input,"email",254);
-        return studentRequest("register",RoomStore.obj("name",name,"email",email)).getString("email");
+        String email=RoomStore.check(input,"email",254);
+        String invite=RoomStore.check(input,"invite",43);
+        return CloudClass.enroll(invite,RoomStore.obj("op","register","name",name,"email",email,"device",studentDevice())).getString("email");
     }
 
     private JSONArray pendingSuggestions()throws JSONException{
@@ -255,7 +259,7 @@ public final class RoomActivity extends Activity {
             try{input=new JSONObject(raw);}catch(JSONException error){return;}
             String operation=input.optString("op");
             if(operation.equals("ownerEnrollment")||operation.startsWith("online")||operation.startsWith("shared")||
-                    operation.equals("studentFeedback")||operation.equals("studentSuggest")){
+                    operation.equals("studentFeedback")||operation.equals("studentSuggest")||operation.equals("renewInvitation")){
                 syncExecutor.execute(()->{
                     try{
                         if(owner?token.isEmpty():!localData().getBoolean("remembered",false))
@@ -272,6 +276,16 @@ public final class RoomActivity extends Activity {
                             case "ownerEnrollment":
                                 if(!owner)throw new Exception("العملية للمالك.");
                                 result=RoomStore.obj("code",ownerEnrollmentCode());break;
+                            case "renewInvitation":
+                                if(owner)throw new Exception("العملية للطالب.");
+                                SharedPreferences local=localData();
+                                if(!local.contains("email"))throw new Exception("اربط البريد الإلكتروني أولًا.");
+                                input.put("email",local.getString("email",""));
+                                result=RoomStore.obj("email",linkStudentEmail(local.getString("name",""),input));
+                                try{syncCloud();}catch(Exception ignored){}
+                                syncTimer.removeCallbacks(retrySync);
+                                syncTimer.post(retrySync);
+                                break;
                             case "studentFeedback":
                                 if(owner)throw new Exception("العملية للطالب.");
                                 if(input.optBoolean("refresh")){
@@ -294,6 +308,11 @@ public final class RoomActivity extends Activity {
                             default:
                                 if(!owner)throw new Exception("العملية للمالك.");
                                 String action=operation.substring("online".length()).toLowerCase(java.util.Locale.ROOT);
+                                switch(action){
+                                    case "createinvite": action="create-invite";break;
+                                    case "revokeinvite": action="revoke-invite";break;
+                                    case "resetregistration": action="reset-registration";break;
+                                }
                                 result=cloudRequest(input.put("op",action));
                         }
                         finishRequest(id,RoomStore.obj("value",result));

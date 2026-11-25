@@ -13,8 +13,8 @@ test('ships separate student and owner launchers without the hosted web app', ()
     const source = read('android/' + manifest);
     assert.ok(source.includes('package="' + id + '"'));
     assert.ok(source.includes('android:name="' + activity + '"'));
-    assert.match(source, /android:versionCode="22"/);
-    assert.match(source, /android:versionName="0\.7\.9"/);
+    assert.match(source, /android:versionCode="85"/);
+    assert.match(source, /android:versionName="0\.8\.5"/);
     assert.match(source, /android:usesCleartextTraffic="false"/);
     assert.doesNotMatch(source, /android.intent.category.BROWSABLE/);
   }
@@ -30,7 +30,7 @@ test('the student password stays local and classroom traffic uses HTTPS', () => 
   assert.match(script, /rpc\(hasAccount\?'unlock':'register',data\)/);
   assert.doesNotMatch(script, /شبكة الواي فاي/);
   const bridge = read('android/src/school/dafaa/RoomActivity.java');
-  assert.match(bridge, /studentRequest\("register",RoomStore\.obj\("name",name,"email",email\)\)/);
+  assert.match(bridge, /CloudClass\.enroll\(invite,RoomStore\.obj\("op","register","name",name,"email",email,"device",studentDevice\(\)\)\)/);
   assert.match(bridge, /note_\s*"\+index/);
   assert.match(bridge, /putString\("outbox",queue\.toString\(\)\)\.commit\(\)/);
   assert.match(read('android/src/school/dafaa/CloudClass.java'), /HttpsURLConnection/);

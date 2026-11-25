@@ -144,9 +144,9 @@ function unlock(){
     ? field('البريد الإلكتروني','email','email',studentEmail)
     : field('الاسم','name','text',name);
   return [hero('قوم دروس','حساب الطالب على هذا الهاتف'),
-    !hasAccount&&el('p','يحتاج التسجيل إلى اتصال بالإنترنت. يظهر اسمك وبريدك للمالك، وتبقى كلمة السر على هاتفك.','empty-state'),
+    !hasAccount&&el('p','يحتاج التسجيل إلى دعوة من المالك واتصال بالإنترنت. يظهر اسمك وبريدك للمالك، وتبقى كلمة السر على هاتفك.','empty-state'),
     form(hasAccount?'تسجيل الدخول':'إنشاء حساب الطالب',[
-      identity,...(!hasAccount?[field('البريد الإلكتروني','email','email')]:[]),
+      identity,...(!hasAccount?[field('البريد الإلكتروني','email','email'),field('رمز دعوة الصف','invite')]:[]),
       field('كلمة السر · ٦ أحرف على الأقل','password','password')
     ],hasAccount?'دخول':'تسجيل',async data=>{
       const account=await rpc(hasAccount?'unlock':'register',data);
@@ -158,7 +158,7 @@ function unlock(){
 function linkEmail(){
   return [hero('ربط البريد الإلكتروني','حساب الطالب'),
     el('p','أضف بريدك لاستخدام إشعارات الصف واقتراحاته ومنشوراته. يظهر البريد في لوحة المالك.','empty-state'),
-    form('',[field('البريد الإلكتروني','email','email')],'ربط البريد',async data=>{
+    form('',[field('البريد الإلكتروني','email','email'),field('رمز دعوة الصف','invite')],'ربط البريد',async data=>{
       studentEmail=(await rpc('linkEmail',data)).email;
       await go('home');
     }),button('لاحقًا',()=>go('home'))];
@@ -288,6 +288,11 @@ function updateRegistrationList(container, data){
       if(entry.email)email.dir='ltr';
       const card=wrap('card',el('strong',entry.name),email,el('small','تم التسجيل · '+dateTime(entry.created)));
       if(entry.email){
+        if(entry.enrolled)card.append(button('إلغاء اعتماد الجهاز',async()=>{
+          if(!confirm('إلغاء اعتماد الجهاز الحالي لهذا البريد؟'))return;
+          await rpc('onlineResetRegistration',{email:entry.email});
+          await go('accounts');
+        },'danger'));
         const blocked=Boolean(entry.blocked);
         card.append(el('small',blocked?'محظور':'مسموح له باستخدام الصف'),
           button(blocked?'رفع الحظر':'حظر البريد',async()=>{
@@ -318,7 +323,19 @@ setInterval(()=>{
 },5000);
 async function accounts(){
   const list=wrap('registration-list');list.id='registrations';
-  return [hero('الطلاب',cloudUrl?'تسجيلات الصف':'التسجيلات المحفوظة'),list,
+  const code=el('input');
+  code.readOnly=true;code.dir='ltr';code.setAttribute('aria-label','رمز دعوة الطالب');
+  const result=wrap('card',el('strong','رمز الدعوة · صالح ٢٤ ساعة'),code,
+    button('نسخ الرمز',async()=>{code.select();if(!document.execCommand('copy'))throw Error('حدّد الرمز وانسخه.');message('نُسخ رمز الدعوة.');}));
+  result.hidden=true;
+  const invitation=form('دعوة طالب',[field('اسم الطالب','name'),field('بريد الطالب','email','email')],'إنشاء دعوة',async(data,status)=>{
+    const issued=await rpc('onlineCreateInvite',data);
+    code.value=issued.invite;result.hidden=false;code.focus();code.select();status.textContent='أُنشئت الدعوة.';
+  });
+  const revoke=form('إلغاء دعوة معلّقة',[field('بريد الطالب','email','email')],'إلغاء الدعوة',async(data,status)=>{
+    await rpc('onlineRevokeInvite',data);result.hidden=true;code.value='';status.textContent='أُلغيت الدعوة.';
+  });
+  return [hero('الطلاب',cloudUrl?'تسجيلات الصف':'التسجيلات المحفوظة'),invitation,result,revoke,list,
     cache.students.length>0&&el('h2','حسابات الصف السابقة'),
     ...cache.students.map(entry=>wrap('card',el('strong',entry.name),
       el('small',entry.last_seen?'آخر نشاط: '+dateTime(entry.last_seen):'لم يسجّل الدخول بعد'),
@@ -371,6 +388,9 @@ function settings(){
   }
   return [hero('الإعدادات',name||'قوم دروس'),enrollment,
     offline&&!studentEmail&&button('ربط البريد الإلكتروني',()=>go('linkEmail')),
+    offline&&studentEmail&&form('ربط هذا الجهاز بالصف',[field('رمز دعوة الصف','invite')],'تفعيل الدعوة',async(data,status)=>{
+      await rpc('renewInvitation',data);status.textContent='ربطنا جهازك بالصف.';
+    }),
     offline&&button('ملاحظاتي',()=>go('notes')),
     owner&&wrap('card',el('h2','النسخ الاحتياطي المشفّر'),
       el('p','احفظ نسخة من بيانات هذه اللوحة على الهاتف. لبيانات الصف عبر الإنترنت نسخة احتياطية تُؤخذ من الخادم.'),
@@ -410,7 +430,7 @@ function sourceForm(subject){
   const title=field('عنوان المصدر','title');
   title.querySelector('input').maxLength=180;
   let previousFile='',previousTitle='',requestId='';
-  return form('',[title,upload],owner?'حفظ المصدر':'نشر لجميع الطلاب',async data=>{
+  return form('',[title,upload],owner?'حفظ المصدر':'إرسال للمراجعة',async data=>{
     const title=data.title.trim();
     if(!title)throw Error('اكتب عنوان المصدر.');
     const image=await prepareSourceImage(data.file);
@@ -422,6 +442,7 @@ function sourceForm(subject){
         requestId=crypto.randomUUID();
       }
       await rpc('sharedPublish',{subject:subject.name,title,image,requestId});
+      message('أُرسلت الصورة إلى المالك للمراجعة.');
     }
     await go('subject',subject);
   });
@@ -449,6 +470,11 @@ function sharedFeed(subject){
       }catch(err){notice.textContent=err.message;}
       finally{delete details.dataset.loading;}
     };
+    if(owner&&!entry.approved)details.append(button('اعتماد الصورة',async()=>{
+      if(!image.hasAttribute('src'))throw Error('افتح الصورة وراجعها قبل اعتمادها.');
+      if(!confirm('هل راجعت الصورة وتأكدت من خلوها من البيانات الشخصية؟'))return;
+      await rpc('onlineApproveSource',{id:entry.id});await load();
+    }));
     if(owner)details.append(button('حذف المنشور',async()=>{
       if(!confirm('حذف هذا المصدر من جميع أجهزة الصف؟'))return;
       await rpc('onlineRemoveSource',{id:entry.id});

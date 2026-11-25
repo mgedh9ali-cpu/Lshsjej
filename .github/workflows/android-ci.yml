@@ -2,11 +2,11 @@ name: Android apps - validate and package
 
 on:
   push:
-    branches: [build/android-0.7.7]
+    branches: [build/android-0.7.7, release/android-classroom-invitations]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: android-build-${{ github.ref }}
@@ -62,19 +62,19 @@ jobs:
       - name: Build Android student application
         run: |
           mkdir -p dist
-          bash android/build.sh dist/QumDorous-Student-0.7.9.apk student
+          bash android/build.sh dist/QumDorous-Student-0.8.5.apk student
       - name: Build Android owner application
-        run: bash android/build.sh dist/QumDorous-Owner-0.7.9.apk owner
+        run: bash android/build.sh dist/QumDorous-Owner-0.8.5.apk owner
       - name: Verify Android packages
         run: |
           build_tools="$ANDROID_SDK_ROOT/build-tools/35.0.0"
           for edition in Student Owner; do
-            apk="dist/QumDorous-$edition-0.7.9.apk"
+            apk="dist/QumDorous-$edition-0.8.5.apk"
             "$build_tools/apksigner" verify --verbose --print-certs "$apk"
             package=school.dafaa
             [[ "$edition" != Owner ]] || package=school.dafaa.owner
             "$build_tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/apk-badging.txt"
-            grep -F "package: name='$package' versionCode='22' versionName='0.7.9'" "$RUNNER_TEMP/apk-badging.txt"
+            grep -F "package: name='$package' versionCode='85' versionName='0.8.5'" "$RUNNER_TEMP/apk-badging.txt"
             unzip -Z1 "$apk" > "$RUNNER_TEMP/apk-files.txt"
             for asset in room.html room.js room.css cairo.woff2; do
               grep -Fx "assets/$asset" "$RUNNER_TEMP/apk-files.txt"
@@ -85,6 +85,15 @@ jobs:
       - name: Save both APKs as build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: QumDorous-Android-0.7.9-release
+          name: QumDorous-Android-0.8.5-release
           path: dist/
           if-no-files-found: error
+
+      - name: Publish signed release
+        if: github.ref == 'refs/heads/release/android-classroom-invitations'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create android-0.8.5 dist/*.apk dist/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --title 'قوم دروس 0.8.5' \
+            --notes 'أصبح ربط أجهزة الصف يحتاج إلى دعوة يصدرها المالك. الحسابات الحالية تدخل الدعوة من الإعدادات.'
