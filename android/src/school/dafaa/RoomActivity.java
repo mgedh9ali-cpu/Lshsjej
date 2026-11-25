@@ -24,7 +24,13 @@ public final class RoomActivity extends Activity {
     private volatile boolean foreground;
     private volatile boolean noticesConnected;
     private String backupPassword;
-    private byte[] pendingSourceDownload;
+    private volatile Uri selectedSource;
+    private SourceDownload pendingSourceDownload;
+    private final ExecutorService sourceTransfers=Executors.newSingleThreadExecutor();
+
+    private interface SourceDownload {
+        void write(java.io.OutputStream output) throws Exception;
+    }
     private String restorePassword;
     @Override public void onCreate(Bundle saved){
         super.onCreate(saved);
@@ -276,6 +282,24 @@ public final class RoomActivity extends Activity {
             JSONObject input;
             try{input=new JSONObject(raw);}catch(JSONException error){return;}
             String operation=input.optString("op");
+            if(operation.equals("sharedUploadFile")){
+                Uri source=selectedSource;
+                sourceTransfers.execute(()->{
+                    try{
+                        if(owner?token.isEmpty():!localData().getBoolean("remembered",false))
+                            throw new Exception("سجّل الدخول لربط الصف.");
+                        if(source==null)throw new Exception("اختر الملف مجددًا.");
+                        try(java.io.InputStream stream=getContentResolver().openInputStream(source)){
+                            if(stream==null)throw new Exception("تعذّرت قراءة الملف.");
+                            CloudClass.uploadFile(CloudClass.DEFAULT_ORIGIN,sourceAuthorization(),input,stream,sourceProgress(id));
+                        }
+                        finishRequest(id,RoomStore.obj("value",RoomStore.obj()));
+                    }catch(Exception error){
+                        try{finishRequest(id,RoomStore.obj("error",RoomLink.safe(error)));}catch(Exception ignored){}
+                    }
+                });
+                return;
+            }
             if(operation.startsWith("online")||operation.startsWith("shared")||
                     operation.equals("studentFeedback")||operation.equals("studentNotices")||operation.equals("studentSuggest")||
                     operation.equals("redeemStudentInvite")||operation.equals("redeemOwnerInvite")){
@@ -305,9 +329,7 @@ public final class RoomActivity extends Activity {
                                     case "sharedSolve": actionName="solve";break;
                                     default: actionName="source";
                                 }
-                                CloudClass.Progress progress=operation.equals("sharedPublish")?(bytes,total)->runOnUiThread(()->{
-                                    if(!isDestroyed())web.evaluateJavascript("window.uploadProgress("+id+","+bytes+","+total+")",null);
-                                }):null;
+                                CloudClass.Progress progress=operation.equals("sharedPublish")?sourceProgress(id):null;
                                 result=owner?cloudRequest(input.put("op",actionName),progress):studentRequest(actionName,input,progress);
                                 if(operation.equals("sharedDownload")){
                                     prepareSourceDownload(result.getJSONObject("entry"));
@@ -459,16 +481,45 @@ public final class RoomActivity extends Activity {
         if(web==null||isDestroyed())return;
         web.evaluateJavascript("window.backupComplete("+success+","+JSONObject.quote(message)+")",null);
     }
+    private CloudClass.Progress sourceProgress(int id){
+        return new CloudClass.Progress() {
+            private int lastPercent=-1;
+
+            @Override public void written(int bytes,int total){
+                int percent=(int)(100L*bytes/total);
+                if(percent<=lastPercent)return;
+                lastPercent=percent;
+                runOnUiThread(()->{
+                    if(!isDestroyed())web.evaluateJavascript("window.uploadProgress("+id+","+bytes+","+total+")",null);
+                });
+            }
+        };
+    }
+    private String sourceAuthorization()throws Exception{
+        if(!owner)return "Device "+deviceCredential("device");
+        String device=cloud().getString("owner_device","");
+        if(device.isEmpty())throw new Exception("اتصال المالك غير متاح على هذا الهاتف.");
+        return "OwnerDevice "+device;
+    }
     private void prepareSourceDownload(JSONObject entry)throws Exception{
         JSONObject file=entry.optJSONObject("file");
-        final String name=file==null?"QumDorous-source-"+entry.getLong("id")+".jpg":file.getString("name");
+        long id=entry.getLong("id");
+        final String name=file==null?"QumDorous-source-"+id+".jpg":file.getString("name");
         final String mime=file==null?"image/jpeg":"application/octet-stream";
-        String encoded=file==null?entry.getString("image").substring("data:image/jpeg;base64,".length()):file.getString("base64");
-        final byte[] bytes=android.util.Base64.decode(encoded,android.util.Base64.DEFAULT);
+        final SourceDownload download;
+        if(file!=null&&file.has("size")){
+            long size=file.getLong("size");
+            String authorization=sourceAuthorization();
+            download=output->CloudClass.downloadFile(CloudClass.DEFAULT_ORIGIN,authorization,id,size,output);
+        }else{
+            String encoded=file==null?entry.getString("image").substring("data:image/jpeg;base64,".length()):file.getString("base64");
+            final byte[] bytes=android.util.Base64.decode(encoded,android.util.Base64.DEFAULT);
+            download=output->output.write(bytes);
+        }
         runOnUiThread(()->{
             if(isFinishing()||isDestroyed())return;
             if(pendingSourceDownload!=null){noticeBackup(false,"أكمل تنزيل المصدر الحالي أولًا.");return;}
-            pendingSourceDownload=bytes;
+            pendingSourceDownload=download;
             try{
                 startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
                     .setType(mime).putExtra(Intent.EXTRA_TITLE,name),92);
@@ -483,19 +534,21 @@ public final class RoomActivity extends Activity {
         super.onActivityResult(code,result,data);
         if(code==89&&picker!=null){
             Uri u=result==RESULT_OK&&data!=null?data.getData():null;
+            if(u!=null&&"content".equals(u.getScheme()))selectedSource=u;
             picker.onReceiveValue(u!=null&&"content".equals(u.getScheme())?new Uri[]{u}:null);
             picker=null;
             return;
         }
         if(code==92){
-            final byte[] bytes=pendingSourceDownload;
+            final SourceDownload download=pendingSourceDownload;
             pendingSourceDownload=null;
             final Uri destination=result==RESULT_OK&&data!=null?data.getData():null;
-            if(bytes!=null&&destination!=null&&"content".equals(destination.getScheme()))tasks.execute(()->{
+            if(download!=null&&destination!=null&&"content".equals(destination.getScheme()))sourceTransfers.execute(()->{
                 try(java.io.OutputStream out=getContentResolver().openOutputStream(destination,"w")){
                     if(out==null)throw new java.io.IOException();
-                    out.write(bytes);
+                    download.write(out);
                 }catch(Exception e){
+                    try{android.provider.DocumentsContract.deleteDocument(getContentResolver(),destination);}catch(Exception ignored){}
                     runOnUiThread(()->noticeBackup(false,"تعذّر حفظ المصدر."));
                     return;
                 }
@@ -534,5 +587,5 @@ public final class RoomActivity extends Activity {
         });
     }
     @Override public void onBackPressed(){web.evaluateJavascript("window.backPage ? backPage() : false",v->{if("false".equals(v))super.onBackPressed();});}
-    @Override protected void onDestroy(){syncTimer.removeCallbacks(retrySync);syncExecutor.shutdownNow();tasks.shutdownNow();if(picker!=null)picker.onReceiveValue(null);web.removeJavascriptInterface("Classroom");web.destroy();super.onDestroy();}
+    @Override protected void onDestroy(){syncTimer.removeCallbacks(retrySync);syncExecutor.shutdownNow();sourceTransfers.shutdownNow();tasks.shutdownNow();if(picker!=null)picker.onReceiveValue(null);web.removeJavascriptInterface("Classroom");web.destroy();super.onDestroy();}
 }
