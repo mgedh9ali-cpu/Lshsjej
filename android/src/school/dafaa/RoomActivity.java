@@ -23,15 +23,15 @@ public final class RoomActivity extends Activity {
     private final Runnable retrySync=this::synchronizeStudent;
     private volatile boolean foreground;
     private volatile boolean noticesConnected;
-    private volatile String classroomBlock = "";
     private String backupPassword;
+    private byte[] pendingSourceDownload;
     private String restorePassword;
     @Override public void onCreate(Bundle saved){
         super.onCreate(saved);
         if(android.os.Build.VERSION.SDK_INT>=30)getWindow().setDecorFitsSystemWindows(false);
         owner="school.dafaa.owner".equals(getPackageName());
         base=owner?"https://room.invalid/":"https://classroom.invalid/";
-        if(owner)store=new RoomStore(this);
+        if(owner){store=new RoomStore(this);cloud().edit().remove("owner_session").apply();}
         token=getPreferences(MODE_PRIVATE).getString(owner?"ownerToken":"studentToken","");
 
         web=new WebView(this);web.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
@@ -62,7 +62,7 @@ public final class RoomActivity extends Activity {
         web.setWebChromeClient(new WebChromeClient(){
             @Override public boolean onShowFileChooser(WebView v,ValueCallback<Uri[]> cb,FileChooserParams p){
                 if(picker!=null)picker.onReceiveValue(null);picker=cb;
-                try{startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*"),89);}
+                try{startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(p.getAcceptTypes().length==1&&p.getAcceptTypes()[0].startsWith("image/")?"image/*":"*/*"),89);}
                 catch(ActivityNotFoundException e){picker=null;cb.onReceiveValue(null);}return true;
             }});
         web.addJavascriptInterface(new Bridge(),"Classroom");web.loadUrl(base+"room.html");
@@ -71,7 +71,7 @@ public final class RoomActivity extends Activity {
     @Override protected void onStart(){
         super.onStart();
         foreground=true;
-        if(!owner)syncTimer.post(retrySync);
+        if(!owner){syncTimer.removeCallbacks(retrySync);syncTimer.post(retrySync);}
     }
 
     @Override protected void onStop(){
@@ -85,71 +85,44 @@ public final class RoomActivity extends Activity {
 
     private boolean linked(){return !owner || !cloud().getString("key","").isEmpty();}
 
-    private String ownerDevice()throws Exception{
-        SharedPreferences config=cloud();
-        String device=config.getString("owner_device","");
-        if(device.isEmpty()){
-            device=RoomStore.random(32);
-            if(!config.edit().putString("owner_device",device).commit())throw new Exception("تعذّر حفظ اعتماد الهاتف.");
-        }
-        return device;
-    }
-
-    private String ownerEnrollmentCode()throws Exception{
-        byte[] digest=java.security.MessageDigest.getInstance("SHA-256")
-            .digest(ownerDevice().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        return android.util.Base64.encodeToString(digest,android.util.Base64.URL_SAFE|android.util.Base64.NO_WRAP|android.util.Base64.NO_PADDING);
-    }
-
     private JSONObject cloudRequest(JSONObject payload)throws Exception{
-        SharedPreferences config=cloud();
-        String origin=config.getString("url",CloudClass.DEFAULT_ORIGIN);
-        String key=config.getString("key","");
-        if(owner){
-            try{return CloudClass.ownerDevice(origin,ownerDevice(),payload);}
-            catch(CloudClass.Unauthorized denied){
-                if(key.isEmpty())throw new Exception("هذا الهاتف بانتظار اعتماد لوحة المالك.");
-            }
-        }
-        return CloudClass.call(origin,key,payload);
+        return cloudRequest(payload,null);
     }
 
-    private synchronized String studentDevice() throws Exception {
+    private JSONObject cloudRequest(JSONObject payload,CloudClass.Progress progress)throws Exception{
         SharedPreferences config=cloud();
-        String device=config.getString("device","");
-        if(device.isEmpty()){
-            device=RoomStore.random(32);
-            if(!config.edit().putString("device",device).commit())throw new Exception("تعذّر حفظ اتصال الصف.");
+        String origin=owner?CloudClass.DEFAULT_ORIGIN:config.getString("url",CloudClass.DEFAULT_ORIGIN);
+        if(!owner)return CloudClass.call(origin,config.getString("key",""),payload);
+        String device=config.getString("owner_device","");
+        if(device.isEmpty())
+            throw new Exception("اتصال المالك غير متاح على هذا الهاتف.");
+        try{
+            return progress==null?CloudClass.ownerDevice(origin,device,payload):
+                CloudClass.upload(origin,"OwnerDevice "+device,payload,progress);
+        }catch(CloudClass.Unauthorized denied){
+            throw new Exception("اتصال المالك غير متاح على هذا الهاتف.");
         }
-        return device;
     }
 
     private JSONObject studentRequest(String op,JSONObject data)throws Exception{
-        String device=studentDevice();
-        JSONObject request=data.put("op",op).put("device",device);
-        try {
-            JSONObject response = CloudClass.student(device,request);
-            setClassroomBlock("");
-            return response;
-        } catch (CloudClass.Blocked error) {
-            setClassroomBlock(error.getMessage());
-            throw error;
+        return studentRequest(op,data,null);
+    }
+
+    private synchronized String deviceCredential(String key)throws Exception{
+        SharedPreferences config=cloud();
+        String device=config.getString(key,"");
+        if(device.isEmpty()){
+            device=RoomStore.random(32);
+            if(!config.edit().putString(key,device).commit())throw new Exception("تعذّر حفظ اتصال الصف.");
         }
+        return device;
     }
 
-    private void setClassroomBlock(String message) {
-        if (message.equals(classroomBlock)) return;
-        classroomBlock = message;
-        refreshCloudUI();
-        runOnUiThread(()->{
-            if(!isFinishing()&&!isDestroyed())web.evaluateJavascript("if(window.noticesUpdated)window.noticesUpdated()",null);
-        });
-    }
-
-    private String linkStudentEmail(String name, JSONObject input)throws Exception {
-        String email=RoomStore.check(input,"email",254);
-        String invite=RoomStore.check(input,"invite",43);
-        return CloudClass.enroll(invite,RoomStore.obj("op","register","name",name,"email",email,"device",studentDevice())).getString("email");
+    private JSONObject studentRequest(String op,JSONObject data,CloudClass.Progress progress)throws Exception{
+        String device=deviceCredential("device");
+        JSONObject request=data.put("op",op);
+        return progress==null?CloudClass.student(device,request):
+            CloudClass.upload(CloudClass.DEFAULT_ORIGIN,"Device "+device,request,progress);
     }
 
     private JSONArray pendingSuggestions()throws JSONException{
@@ -159,17 +132,63 @@ public final class RoomActivity extends Activity {
     private void syncCloud()throws Exception{
         if(!linked()||!localData().getBoolean("remembered",false))return;
         SharedPreferences config=cloud();
+        JSONObject inbox=studentRequest("sync",new JSONObject());
         JSONArray pending=pendingSuggestions();
+        boolean sent=false;
         while(pending.length()>0){
-            studentRequest("suggest",pending.getJSONObject(0));
-            pending.remove(0);
+            try{studentRequest("suggest",pending.getJSONObject(0));}
+            catch(Exception error){break;}
+            pending.remove(0);sent=true;
             if(!config.edit().putString("outbox",pending.toString()).commit())throw new Exception("تعذّر حفظ حالة الإرسال.");
         }
-        JSONObject inbox=studentRequest("sync",new JSONObject());
+        if(sent){
+            try{inbox=studentRequest("sync",new JSONObject());}catch(Exception ignored){}
+        }
+        notifyStudent(inbox);
         boolean changed=!inbox.getJSONArray("entries").toString().equals(config.getString("feedback","[]"));
         config.edit().putString("feedback",inbox.getJSONArray("entries").toString()).apply();
         updateStudentNotices(localData(),inbox.getJSONArray("notices"));
         if(changed)refreshCloudUI();
+    }
+
+    private static final String NOTICE_CHANNEL="class_updates";
+    private boolean studentAlertsAllowed(){
+        android.app.NotificationManager manager=getSystemService(android.app.NotificationManager.class);
+        return (android.os.Build.VERSION.SDK_INT<24||manager.areNotificationsEnabled()) &&
+            (android.os.Build.VERSION.SDK_INT<33||checkSelfPermission("android.permission.POST_NOTIFICATIONS")==android.content.pm.PackageManager.PERMISSION_GRANTED);
+    }
+    private void notifyStudent(JSONObject inbox)throws JSONException{
+        if(!localData().getBoolean("remembered",false))return;
+        if(!localData().getBoolean("alerts",false)||!studentAlertsAllowed())return;
+        JSONArray notices=inbox.getJSONArray("notices"), entries=inbox.getJSONArray("entries");
+        JSONArray previous=new JSONArray(localData().getString("noticeCache","[]"));
+        JSONArray oldEntries=new JSONArray(cloud().getString("feedback","[]"));
+        Set<Long> priorIds=new HashSet<>();
+        for(int i=0;i<previous.length();i++)priorIds.add(previous.getJSONObject(i).getLong("id"));
+        Map<String,String> oldReplies=new HashMap<>();
+        for(int i=0;i<oldEntries.length();i++){
+            JSONObject item=oldEntries.getJSONObject(i);
+            oldReplies.put(item.getString("id"),item.optString("reply",""));
+        }
+        boolean newReply=false;
+        for(int i=0;i<entries.length();i++){
+            JSONObject item=entries.getJSONObject(i);
+            String reply=item.isNull("reply")?"":item.optString("reply","");
+            if(!reply.isEmpty()&&!reply.equals(oldReplies.get(item.getString("id"))))newReply=true;
+        }
+        boolean newNotice=false;
+        for(int i=0;i<notices.length();i++)if(!priorIds.contains(notices.getJSONObject(i).getLong("id")))newNotice=true;
+        if(!newReply&&!newNotice)return;
+        android.app.NotificationManager manager=getSystemService(android.app.NotificationManager.class);
+        if(android.os.Build.VERSION.SDK_INT>=26)
+            manager.createNotificationChannel(new android.app.NotificationChannel(NOTICE_CHANNEL,"أخبار الصف",android.app.NotificationManager.IMPORTANCE_DEFAULT));
+        Intent launch=new Intent(this,RoomActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        android.app.PendingIntent tap=android.app.PendingIntent.getActivity(this,0,launch,android.app.PendingIntent.FLAG_IMMUTABLE);
+        android.app.Notification.Builder builder=android.os.Build.VERSION.SDK_INT>=26?
+            new android.app.Notification.Builder(this,NOTICE_CHANNEL):new android.app.Notification.Builder(this);
+        manager.notify(101,builder.setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("قوم دروس")
+            .setContentText(newReply?"وصلك رد في الاقتراحات.":"لديك إشعار جديد في الصف.")
+            .setAutoCancel(true).setVisibility(android.app.Notification.VISIBILITY_PRIVATE).setContentIntent(tap).build());
     }
 
     private void refreshCloudUI(){
@@ -181,7 +200,7 @@ public final class RoomActivity extends Activity {
     private void synchronizeStudent(){
         if(!foreground||isFinishing()||isDestroyed())return;
         SharedPreferences local=localData();
-        if(!local.getBoolean("remembered",false)||!local.contains("email")||!syncInFlight.compareAndSet(false,true))return;
+        if(!local.getBoolean("remembered",false)||!syncInFlight.compareAndSet(false,true))return;
         syncExecutor.execute(()->{
             try{
                 syncCloud();
@@ -217,40 +236,39 @@ public final class RoomActivity extends Activity {
 
     private Object studentAccount(String op,JSONObject p)throws Exception{
         SharedPreferences local=localData();
-        String name=local.getString("name","");
-        String savedEmail=local.getString("email","");
-        boolean registering=op.equals("register");
-        if(registering||savedEmail.isEmpty())name=RoomStore.check(p,"name",100);
+        String importedEmail=local.getString("email","");
+        String email=p.optString("email","").trim().toLowerCase(Locale.ROOT);
+        if(email.length()>254||!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches())
+            throw new Exception("أدخل عنوان بريد إلكتروني صحيحًا.");
+        String name=op.equals("register")?RoomStore.check(p,"name",100):local.getString("name","");
+        if(!op.equals("register")&&!importedEmail.isEmpty()&&!importedEmail.equals(email))
+            throw new Exception("البريد أو كلمة السر غير صحيحة.");
         String password=p.optString("password","");
         if(password.length()<6||password.length()>128)throw new Exception("اكتب كلمة سر من 6 إلى 128 حرفًا.");
         SharedPreferences.Editor edit=local.edit();
-        if(registering){
+        if(op.equals("register")){
             if(local.contains("hash"))throw new Exception("يوجد حساب محلي على هذا الهاتف بالفعل.");
             if(name.matches("(?s).*\\p{Cntrl}.*"))throw new Exception("الاسم غير صالح.");
             byte[] salt=new byte[16];
             new java.security.SecureRandom().nextBytes(salt);
             edit.putString("name",name).putString("salt",android.util.Base64.encodeToString(salt,2))
                 .putString("hash",android.util.Base64.encodeToString(localHash(password.toCharArray(),salt),2));
-            savedEmail=linkStudentEmail(name,p);
-            edit.putString("email",savedEmail);
         }else{
             byte[] salt=android.util.Base64.decode(local.getString("salt",""),0);
             byte[] digest=android.util.Base64.decode(local.getString("hash",""),0);
-            boolean matchingLogin=savedEmail.isEmpty()?local.getString("name","").equals(name)
-                :savedEmail.equals(p.optString("email","").trim().toLowerCase(Locale.ROOT));
-            if(!local.contains("hash")||!matchingLogin||
+            if(!local.contains("hash")||
                 !java.security.MessageDigest.isEqual(digest,localHash(password.toCharArray(),salt)))
-                throw new Exception("تحقّق من بيانات الدخول وكلمة السر.");
+                throw new Exception("الاسم أو كلمة السر غير صحيحة.");
         }
-        if(!edit.putBoolean("remembered",true).commit())throw new Exception("تعذّر حفظ الحساب على الهاتف.");
+        if(!edit.putString("email",email).putBoolean("remembered",true).commit())throw new Exception("تعذّر حفظ الحساب على الهاتف.");
         syncTimer.removeCallbacks(retrySync);
         syncTimer.post(retrySync);
-        return RoomStore.obj("name",name,"email",savedEmail);
+        return RoomStore.obj("name",name);
     }
 
     private JSONObject studentFeedback()throws Exception{
         return RoomStore.obj("entries",new JSONArray(cloud().getString("feedback","[]")),
-            "pending",pendingSuggestions(),"configured",linked(),"online",noticesConnected,"blocked",classroomBlock);
+            "pending",pendingSuggestions(),"configured",linked(),"online",noticesConnected);
     }
 
     public final class Bridge{
@@ -258,61 +276,76 @@ public final class RoomActivity extends Activity {
             JSONObject input;
             try{input=new JSONObject(raw);}catch(JSONException error){return;}
             String operation=input.optString("op");
-            if(operation.equals("ownerEnrollment")||operation.startsWith("online")||operation.startsWith("shared")||
-                    operation.equals("studentFeedback")||operation.equals("studentSuggest")||operation.equals("renewInvitation")){
+            if(operation.startsWith("online")||operation.startsWith("shared")||
+                    operation.equals("studentFeedback")||operation.equals("studentNotices")||operation.equals("studentSuggest")||
+                    operation.equals("redeemStudentInvite")||operation.equals("redeemOwnerInvite")){
                 syncExecutor.execute(()->{
                     try{
                         if(owner?token.isEmpty():!localData().getBoolean("remembered",false))
                             throw new Exception("سجّل الدخول لربط الصف.");
                         JSONObject result;
                         switch(operation){
+                            case "sharedSubjects":
                             case "sharedList":
                             case "sharedImage":
                             case "sharedPublish":
-                                String actionName=operation.equals("sharedList")?"sources":operation.equals("sharedImage")?"source":"addsource";
-                                if(owner && operation.equals("sharedPublish"))throw new Exception("النشر المشترك متاح لحساب الطالب.");
-                                result=owner?cloudRequest(input.put("op",actionName)):studentRequest(actionName,input);
+                            case "sharedRemove":
+                            case "sharedStudy":
+                            case "sharedSolve":
+                            case "sharedDownload":
+                                String actionName;
+                                switch(operation){
+                                    case "sharedSubjects": actionName="subjects";break;
+                                    case "sharedList": actionName="sources";break;
+                                    case "sharedPublish": actionName="addsource";break;
+                                    case "sharedRemove": actionName="removesource";break;
+                                    case "sharedStudy": actionName="study";break;
+                                    case "sharedSolve": actionName="solve";break;
+                                    default: actionName="source";
+                                }
+                                CloudClass.Progress progress=operation.equals("sharedPublish")?(bytes,total)->runOnUiThread(()->{
+                                    if(!isDestroyed())web.evaluateJavascript("window.uploadProgress("+id+","+bytes+","+total+")",null);
+                                }):null;
+                                result=owner?cloudRequest(input.put("op",actionName),progress):studentRequest(actionName,input,progress);
+                                if(operation.equals("sharedDownload")){
+                                    prepareSourceDownload(result.getJSONObject("entry"));
+                                    result=RoomStore.obj();
+                                }
                                 break;
-                            case "ownerEnrollment":
-                                if(!owner)throw new Exception("العملية للمالك.");
-                                result=RoomStore.obj("code",ownerEnrollmentCode());break;
-                            case "renewInvitation":
-                                if(owner)throw new Exception("العملية للطالب.");
-                                SharedPreferences local=localData();
-                                if(!local.contains("email"))throw new Exception("اربط البريد الإلكتروني أولًا.");
-                                input.put("email",local.getString("email",""));
-                                result=RoomStore.obj("email",linkStudentEmail(local.getString("name",""),input));
-                                try{syncCloud();}catch(Exception ignored){}
-                                syncTimer.removeCallbacks(retrySync);
-                                syncTimer.post(retrySync);
-                                break;
+                            case "studentNotices":
                             case "studentFeedback":
                                 if(owner)throw new Exception("العملية للطالب.");
                                 if(input.optBoolean("refresh")){
-                                    syncTimer.removeCallbacks(retrySync);
-                                    syncTimer.post(retrySync);
+                                    try{syncCloud();}catch(Exception error){updateStudentNotices(localData(),null);}
                                 }
-                                result=studentFeedback();break;
+                                result=operation.equals("studentFeedback")?studentFeedback():
+                                    RoomStore.obj("notices",new JSONArray(localData().getString("noticeCache","[]")),
+                                        "online",noticesConnected,"configured",linked());
+                                break;
+                            case "redeemStudentInvite":
+                                if(owner)throw new Exception("العملية للطالب.");
+                                result=CloudClass.enroll(RoomStore.check(input,"invite",43),"register",
+                                    localData().getString("email",""),deviceCredential("device"));
+                                syncTimer.removeCallbacks(retrySync);syncTimer.post(retrySync);
+                                break;
+                            case "redeemOwnerInvite":
+                                if(!owner)throw new Exception("العملية للمالك.");
+                                result=CloudClass.enroll(RoomStore.check(input,"invite",43),"register-owner","",deviceCredential("owner_device"));
+                                break;
                             case "studentSuggest":
                                 if(owner||!linked())throw new Exception("اربط الصف عبر الإنترنت أولًا.");
-                                if(!localData().contains("email"))throw new Exception("اربط بريدك الإلكتروني من الإعدادات أولًا.");
-                                if(!classroomBlock.isEmpty())throw new Exception(classroomBlock);
                                 JSONArray queue=pendingSuggestions();
                                 if(queue.length()>=20)throw new Exception("انتظر إرسال الاقتراحات المعلّقة.");
                                 queue.put(RoomStore.obj("requestId",RoomStore.random(24),"body",RoomStore.check(input,"body",2000),"created",System.currentTimeMillis()));
                                 if(!cloud().edit().putString("outbox",queue.toString()).commit())throw new Exception("تعذّر حفظ الاقتراح.");
-                                try{syncCloud();}
-                                catch(CloudClass.Blocked denied){throw denied;}
-                                catch(Exception ignored){updateStudentNotices(localData(),null);}
+                                try{syncCloud();}catch(Exception ignored){updateStudentNotices(localData(),null);}
                                 result=studentFeedback();break;
                             default:
                                 if(!owner)throw new Exception("العملية للمالك.");
                                 String action=operation.substring("online".length()).toLowerCase(java.util.Locale.ROOT);
-                                switch(action){
-                                    case "createinvite": action="create-invite";break;
-                                    case "revokeinvite": action="revoke-invite";break;
-                                    case "resetregistration": action="reset-registration";break;
-                                }
+                                if(action.equals("createinvite"))action="create-invite";
+                                if(action.equals("revokeinvite"))action="revoke-invite";
+                                if(action.equals("resetregistration"))action="reset-registration";
                                 result=cloudRequest(input.put("op",action));
                         }
                         finishRequest(id,RoomStore.obj("value",result));
@@ -330,33 +363,27 @@ public final class RoomActivity extends Activity {
                     if(op.equals("boot")){
                         SharedPreferences local=localData();
                         value=RoomStore.obj("owner",owner,"studentName",owner?"":local.getString("name",""),
-                            "savedSession",owner&&!token.isEmpty(),"hasAccount",!owner&&local.contains("hash"),
+                            "studentEmail",owner?"":local.getString("email",""),"savedSession",owner&&!token.isEmpty(),"hasAccount",!owner&&local.contains("hash"),
                             "cloudUrl",cloud().getString("url",CloudClass.DEFAULT_ORIGIN),
-                            "email",owner?"":local.getString("email",""),
                             "locked",!owner&&!local.getBoolean("remembered",false),
                             "setup",owner&&((JSONObject)store.handle(true,"device",RoomStore.obj("op","status"))).optBoolean("setup"));
                     }else if(!owner&&(op.equals("register")||op.equals("unlock"))){
                         value=studentAccount(op,p);
-                    }else if(!owner&&op.equals("linkEmail")){
-                        SharedPreferences local=localData();
-                        if(!local.getBoolean("remembered",false)||!local.contains("hash")||local.contains("email"))
-                            throw new Exception("سجّل الدخول إلى حساب الطالب لربط البريد.");
-                        String email=linkStudentEmail(local.getString("name",""),p);
-                        if(!local.edit().putString("email",email).commit())throw new Exception("تعذّر حفظ البريد على الهاتف.");
-                        syncTimer.removeCallbacks(retrySync);
-                        syncTimer.post(retrySync);
-                        value=RoomStore.obj("email",email);
-                    }else if(!owner&&op.equals("studentNotices")){
-                        if(!localData().getBoolean("remembered",false))throw new Exception("سجّل الدخول لعرض الإشعارات.");
-                        if(p.optBoolean("refresh")){
-                            syncTimer.removeCallbacks(retrySync);
-                            syncTimer.post(retrySync);
+                    }else if(!owner&&op.equals("studentLogout")){
+                        if(!localData().edit().putBoolean("remembered",false).commit())throw new Exception("تعذّر تسجيل الخروج.");
+                        value=RoomStore.obj();
+                    }else if(!owner&&op.equals("studentAlertSettings")){
+                        if(p.has("enabled")){
+                            boolean enabled=p.getBoolean("enabled");
+                            localData().edit().putBoolean("alerts",enabled).apply();
+                            if(enabled&&android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)
+                                runOnUiThread(()->requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},55));
                         }
-                        value=RoomStore.obj("notices",new JSONArray(localData().getString("noticeCache","[]")),"online",noticesConnected,"configured",linked(),"blocked",classroomBlock);
+                        value=RoomStore.obj("allowed",studentAlertsAllowed(),"enabled",localData().getBoolean("alerts",false));
                     }else if(!owner&&(op.equals("getNote")||op.equals("saveNote"))){
                         if(!localData().getBoolean("remembered",false))throw new Exception("سجّل الدخول لفتح ملاحظاتك.");
                         int index=p.optInt("index",-1);
-                        if(index<0||index>4)throw new Exception("اختر مادة صالحة.");
+                        if(index<0||index>5)throw new Exception("اختر مادة صالحة.");
                         String key="note_"+index;
                         String note=p.optString("text","");
                         if(op.equals("saveNote")){
@@ -364,6 +391,17 @@ public final class RoomActivity extends Activity {
                             if(!localData().edit().putString(key,note).commit())throw new Exception("تعذّر حفظ الملاحظة.");
                         }
                         value=RoomStore.obj("text",localData().getString(key,""));
+                    }else if(op.equals("openStudyLink")){
+                        if(owner?token.isEmpty():!localData().getBoolean("remembered",false))
+                            throw new Exception("سجّل الدخول لفتح الرابط.");
+                        java.net.URI link=new java.net.URI(RoomStore.check(p,"url",2000));
+                        if(!"https".equals(link.getScheme())||link.getHost()==null||link.getUserInfo()!=null)
+                            throw new Exception("رابط الاختبار غير صالح.");
+                        runOnUiThread(()->{
+                            try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(link.toASCIIString())).addCategory(Intent.CATEGORY_BROWSABLE));}
+                            catch(ActivityNotFoundException e){noticeBackup(false,"تعذّر فتح رابط الاختبار.");}
+                        });
+                        value=RoomStore.obj();
                     }else if(owner&&op.equals("backup")){
                         backupPassword=RoomStore.check(p,"password",200);
                         if(backupPassword.length()<12)throw new Exception("اختر كلمة مرور للنسخة من 12 حرفًا على الأقل.");
@@ -419,12 +457,48 @@ public final class RoomActivity extends Activity {
         if(web==null||isDestroyed())return;
         web.evaluateJavascript("window.backupComplete("+success+","+JSONObject.quote(message)+")",null);
     }
+    private void prepareSourceDownload(JSONObject entry)throws Exception{
+        JSONObject file=entry.optJSONObject("file");
+        final String name=file==null?"QumDorous-source-"+entry.getLong("id")+".jpg":file.getString("name");
+        final String mime=file==null?"image/jpeg":"application/octet-stream";
+        String encoded=file==null?entry.getString("image").substring("data:image/jpeg;base64,".length()):file.getString("base64");
+        final byte[] bytes=android.util.Base64.decode(encoded,android.util.Base64.DEFAULT);
+        runOnUiThread(()->{
+            if(isFinishing()||isDestroyed())return;
+            if(pendingSourceDownload!=null){noticeBackup(false,"أكمل تنزيل المصدر الحالي أولًا.");return;}
+            pendingSourceDownload=bytes;
+            try{
+                startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType(mime).putExtra(Intent.EXTRA_TITLE,name),92);
+            }catch(ActivityNotFoundException e){pendingSourceDownload=null;noticeBackup(false,"تعذّر فتح نافذة التنزيل.");}
+        });
+    }
+    @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] results){
+        super.onRequestPermissionsResult(requestCode,permissions,results);
+        if(requestCode==55&&!isDestroyed())web.evaluateJavascript("if(window.studentPermissionChanged)window.studentPermissionChanged()",null);
+    }
     @Override protected void onActivityResult(int code,int result,Intent data){
         super.onActivityResult(code,result,data);
         if(code==89&&picker!=null){
             Uri u=result==RESULT_OK&&data!=null?data.getData():null;
             picker.onReceiveValue(u!=null&&"content".equals(u.getScheme())?new Uri[]{u}:null);
             picker=null;
+            return;
+        }
+        if(code==92){
+            final byte[] bytes=pendingSourceDownload;
+            pendingSourceDownload=null;
+            final Uri destination=result==RESULT_OK&&data!=null?data.getData():null;
+            if(bytes!=null&&destination!=null&&"content".equals(destination.getScheme()))tasks.execute(()->{
+                try(java.io.OutputStream out=getContentResolver().openOutputStream(destination,"w")){
+                    if(out==null)throw new java.io.IOException();
+                    out.write(bytes);
+                }catch(Exception e){
+                    runOnUiThread(()->noticeBackup(false,"تعذّر حفظ المصدر."));
+                    return;
+                }
+                runOnUiThread(()->noticeBackup(true,"تم تنزيل المصدر."));
+            });
             return;
         }
         if(code!=90&&code!=91)return;

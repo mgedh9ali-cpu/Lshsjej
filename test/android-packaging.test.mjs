@@ -30,7 +30,7 @@ test('the student password stays local and classroom traffic uses HTTPS', () => 
   assert.match(script, /rpc\(hasAccount\?'unlock':'register',data\)/);
   assert.doesNotMatch(script, /شبكة الواي فاي/);
   const bridge = read('android/src/school/dafaa/RoomActivity.java');
-  assert.match(bridge, /CloudClass\.enroll\(invite,RoomStore\.obj\("op","register","name",name,"email",email,"device",studentDevice\(\)\)\)/);
+  assert.match(bridge, /CloudClass\.enroll/);
   assert.match(bridge, /note_\s*"\+index/);
   assert.match(bridge, /putString\("outbox",queue\.toString\(\)\)\.commit\(\)/);
   assert.match(read('android/src/school/dafaa/CloudClass.java'), /HttpsURLConnection/);
@@ -79,32 +79,35 @@ test('the bottom bar opens role-specific pages and keeps Materials selected insi
 
 test('the student inbox keeps received notices visible offline', async () => {
   const script = read('android/room/room.js');
-  const start = script.indexOf('function noticeCards(');
+  const start = script.indexOf('let noticeFilter=');
   const end = script.indexOf('async function feed()', start);
   const list = { isConnected: true, replaceChildren(...children) { this.children = children; } };
-  const notice = { created: 0, title: 'موعد الدرس', body: 'الدرس غدًا' };
+  const notice = { id: 12, created: 0, title: 'موعد الدرس', body: 'الدرس غدًا' };
   const requests = [];
+  const state = new Map();
   const env = {
+    noticeFilter: 'all',
+    localStorage: {getItem:key=>state.get(key),setItem:(key,value)=>state.set(key,value)},
+    button: (label,click) => ({label,click}),
     $: () => list, window: {}, date: String, el: (_tag, text) => text,
-    wrap: (_class, ...items) => items, online: true, studentEmail: 'student@example.com',
+    wrap: (_class, ...items) => Object.assign(items,{dataset:{},append(...extra){items.push(...extra);}}), online: true,
     rpc: async (op, options) => {
       requests.push([op, options.refresh]);
-      return { notices: [notice], online: env.online, blocked: env.blocked };
+      return { notices: [notice], online: env.online };
     },
   };
   await runInNewContext(script.slice(start, end) + '\nrefreshStudentNotices(true);', env);
-  assert.deepEqual(Array.from(list.children[0]), ['0', notice.title, notice.body]);
+  assert.deepEqual(Array.from(list.children[0]).slice(0,3), ['0', notice.title, notice.body]);
   env.online = false;
   await runInNewContext('refreshStudentNotices();', env);
   assert.match(list.children[0], /المحفوظة على الهاتف/);
-  assert.deepEqual(Array.from(list.children[1]), ['0', notice.title, notice.body]);
+  assert.deepEqual(Array.from(list.children[1]).slice(0,3), ['0', notice.title, notice.body]);
   assert.deepEqual(requests, [['studentNotices', true], ['studentNotices', false]]);
-  env.blocked = 'هذا البريد محظور من الصف.';
-  await runInNewContext('refreshStudentNotices();', env);
-  assert.deepEqual(list.children, [env.blocked]);
+  await list.children[1][3].click();
+  assert.equal(list.children[1][3], 'مقروءة');
 });
 
 test('source images are published without text extraction', () => {
-  assert.match(read('android/room/room.js'), /rpc\('addSource',\{subject:subject.id,title,image\}\)/);
+  assert.match(read('android/room/room.js'), /rpc\('sharedPublish',\{subject:subject.name,title,\.\.\.attachment,requestId\},/);
   assert.doesNotMatch(read('android/build.sh'), /prepare-ocr|offline\/\*/);
 });

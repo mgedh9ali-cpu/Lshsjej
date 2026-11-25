@@ -4,7 +4,8 @@
     android:versionName="0.8.5">
     <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="35"/>
     <uses-permission android:name="android.permission.INTERNET"/>
-    <application android:label="قوم دروس" android:icon="@drawable/school_logo"
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <application android:label="قوم دروس" android:icon="@drawable/qum_launcher"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:allowBackup="false" android:supportsRtl="true" android:usesCleartextTraffic="false">
         <activity android:name=".RoomActivity" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden">

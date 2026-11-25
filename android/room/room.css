@@ -18,16 +18,16 @@
 }
 :root {
   color-scheme: light;
-  --bg: #f6f8fb;
+  --bg: #f2f5f8;
   --surface: #fff;
-  --navy: #12263d;
+  --navy: #142a3c;
   --navy-deep: #101d30;
   --navy-mid: #203b55;
   --ink: #182b42;
   --muted: #51657b;
   --line: #dce5ee;
   --field-line: #8a9db1;
-  --mint: #a6efd9;
+  --mint: #9cdacb;
   --mint-soft: #dcf7ed;
   --mint-ink: #204f45;
   --gold: #e7bb69;
@@ -263,7 +263,6 @@ pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 
 img { display: block; max-width: 100%; height: auto; border-radius: 12px; }
 .legacy-sources { display: grid; gap: 8px; }
 .registration-list { display: grid; gap: 8px; }
-.registration-list button.danger { color: #a62626; }
 .legacy-sources article {
   padding: 12px;
   background: var(--surface);
@@ -368,3 +367,80 @@ main > .hero { animation: page-in var(--motion) both; }
   main > .hero { animation: none; }
   .bottom-tab-label { transition: none; }
 }
+
+.source-photo { margin-top: 8px; min-height: 6rem; }
+.source-photo img { margin-inline: auto; }
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #101820; --surface: #172531; --ink: #eef5fc; --muted: #b3c5d6;
+  --line: #414f60; --field-line: #71869b; --navy: #ecf3fb;
+  --mint-soft: #254b45; --mint-ink: #d6fff3; --blue-soft: #26384a;
+  --gold-soft: #4b3824; --gold-ink: #ffe1ac;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    color-scheme: dark;
+    --bg: #101820; --surface: #172531; --ink: #eef5fc; --muted: #b3c5d6;
+    --line: #414f60; --field-line: #71869b; --navy: #ecf3fb;
+    --mint-soft: #254b45; --mint-ink: #d6fff3; --blue-soft: #26384a;
+    --gold-soft: #4b3824; --gold-ink: #ffe1ac;
+  }
+}
+.bottom-nav { max-width: min(96vw, 480px); justify-content: stretch; }
+.bottom-nav .bottom-tab { flex: 1 1 0; min-width: 0; padding: 5px 3px; display: grid; gap: 2px; justify-items: center; }
+.bottom-nav .bottom-tab-label { max-width: none; opacity: 1; margin: 0; white-space: nowrap; overflow-wrap: normal; font-size: .63rem; line-height: 1.2; text-align: center; }
+form progress { width: 100%; height: 9px; accent-color: #14776a; }
+
+.bottom-nav .bottom-tab[aria-current="page"] .bottom-tab-label { margin-inline-start: 0; }
+
+/* A stable, full-width rail keeps the tabs fixed on narrow screens. */
+.bottom-nav {
+  width: min(calc(100% - 20px), 520px);
+  max-width: none;
+  border-radius: 17px;
+  box-shadow: 0 4px 18px #14273d18;
+  padding: 5px;
+  gap: 4px;
+}
+.bottom-nav .bottom-tab { min-height: 52px; border-radius: 12px; padding-inline: 1px; }
+.bottom-nav .bottom-tab-label { font-size: clamp(.62rem, 2.8vw, .76rem); }
+.hero {
+  padding: 12px 4px 6px;
+  gap: 5px;
+  background: none;
+  color: var(--ink);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.hero::before, .hero::after, .hero small:empty { display: none; }
+.hero small { color: var(--muted); }
+.card, form { border-radius: 14px; box-shadow: none; }
+.segments {
+  display: flex;
+  flex: 1 1 220px;
+  min-width: 0;
+  gap: 4px;
+  padding: 4px;
+  background: var(--blue-soft);
+  border-radius: 12px;
+}
+.segments button { flex: 1 1 0; padding: 5px; font-size: .82rem; border-color: transparent; background: transparent; }
+.segments button[aria-pressed="true"] { background: var(--surface); border-color: var(--line); color: var(--ink); font-weight: 700; }
+.inbox-card[data-unread="true"] { border-inline-start: 4px solid #13796b; }
+.reply { display: grid; gap: 4px; border-radius: 10px; background: var(--blue-soft); padding: 10px; }
+.inbox-card details { border-top: 1px solid var(--line); padding-top: 6px; }
+.inbox-card summary { cursor: pointer; min-height: 44px; padding-block: 8px; }
+.app-dialog {
+  width: min(calc(100% - 32px), 400px);
+  max-width: none;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 17px;
+}
+.app-dialog[open] { display: grid; gap: 13px; }
+.app-dialog::backdrop { background: #0d1d2a99; }
+button.danger { background: #8d253a; color: #fff; border-color: #8d253a; font-weight: 700; }

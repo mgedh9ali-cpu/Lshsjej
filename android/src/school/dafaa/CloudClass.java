@@ -32,24 +32,30 @@ final class CloudClass {
         return request(DEFAULT_ORIGIN, "Device " + device, payload);
     }
 
-    static JSONObject enroll(String invite, JSONObject payload) throws Exception {
-        if (!invite.matches("[a-zA-Z0-9_-]{43}")) throw new Exception("أدخل رمز الدعوة الكامل من المالك.");
-        return request(DEFAULT_ORIGIN, "Invite " + invite, payload);
+    static JSONObject enroll(String code,String op,String email,String device)throws Exception {
+        if(!code.matches("[a-zA-Z0-9_-]{43}"))throw new Exception("أدخل رمز الدعوة الكامل.");
+        return request(DEFAULT_ORIGIN,"Invite "+code,RoomStore.obj("op",op,"email",email,"device",device));
     }
 
     static final class Unauthorized extends Exception {
         Unauthorized(String message) { super(message); }
     }
 
-    static final class Blocked extends Exception {
-        Blocked(String message) { super(message); }
-    }
-
     static JSONObject ownerDevice(String origin, String device, JSONObject payload) throws Exception {
         return request(origin, "OwnerDevice " + device, payload);
     }
 
+    interface Progress { void written(int bytes, int total); }
+
+    static JSONObject upload(String origin, String authorization, JSONObject payload, Progress progress)throws Exception{
+        return request(origin, authorization, payload, progress);
+    }
+
     private static JSONObject request(String origin, String authorization, JSONObject payload) throws Exception {
+        return request(origin, authorization, payload, null);
+    }
+
+    private static JSONObject request(String origin, String authorization, JSONObject payload, Progress progress) throws Exception {
         if (origin.isEmpty()) throw new Exception("اضبط اتصال الصف عبر الإنترنت من الإعدادات.");
         HttpsURLConnection connection = (HttpsURLConnection) new URL(origin + "/v1/classroom").openConnection();
         connection.setInstanceFollowRedirects(false);
@@ -62,7 +68,14 @@ final class CloudClass {
         byte[] request = payload.toString().getBytes(StandardCharsets.UTF_8);
         connection.setFixedLengthStreamingMode(request.length);
         try {
-            try (java.io.OutputStream output = connection.getOutputStream()) { output.write(request); }
+            try (java.io.OutputStream output = connection.getOutputStream()) {
+                if(progress==null)output.write(request);
+                else for(int offset=0;offset<request.length;){
+                    int size=Math.min(65536,request.length-offset);
+                    output.write(request,offset,size);offset+=size;
+                    progress.written(offset,request.length);
+                }
+            }
             int status = connection.getResponseCode();
             if (status >= 300 && status < 400) throw new Exception("عنوان خادم الصف يعيد التوجيه. تحقق من الرابط.");
             try (InputStream input = status == 200 ? connection.getInputStream() : connection.getErrorStream()) {
@@ -76,8 +89,6 @@ final class CloudClass {
                 JSONObject result = new JSONObject(new String(body.toByteArray(), StandardCharsets.UTF_8));
                 if (status == 401)
                     throw new Unauthorized(result.optString("error", "تعذّر التحقق من الاتصال."));
-                if (status == 403)
-                    throw new Blocked(result.optString("error", "هذا البريد محظور من الصف."));
                 if (status != 200) throw new Exception(result.optString("error", "استجابة غير صالحة من خادم الصف."));
                 return result;
             }
