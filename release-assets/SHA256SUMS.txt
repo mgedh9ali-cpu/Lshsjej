@@ -1,0 +1,2 @@
+24db3d34702d19a4154f2770b478d157240303f3e8b25d0506ee2acff33faa6a  QumDorous-Student-0.8.5.apk
+f80835f650d764e38319ae36b6afb8dcfa141b44d7d069d4b0cbda84d0f94365  QumDorous-Owner-0.8.5.apk
