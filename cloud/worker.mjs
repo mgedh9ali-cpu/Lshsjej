@@ -1,3 +1,4 @@
+import { sourceFiles } from './source-files.mjs';
 import { classroom, registrationSchema } from './classroom.mjs';
 import { ownerPage } from './owner.mjs';
 
@@ -74,6 +75,7 @@ export default {
       if (!Number.isSafeInteger(maxStudents) || maxStudents < 1 || maxStudents > 10000) throw Error('Invalid classroom capacity');
       const handle = classroom(database(env.DB), env.QUM_OWNER_KEY, () => initialize(env.DB), {
         maxStudents,
+        files: sourceFiles(env.SOURCE_FILES, env.QUM_OWNER_KEY),
         ownerDeviceHash: env.QUM_OWNER_DEVICE_HASH,
         async limitSuggestion(student) {
           const limits = await Promise.all([
@@ -84,20 +86,28 @@ export default {
         },
       });
       if (path === '/owner') return await ownerPage(request, env, ctx, handle);
+      const authorization = request.headers.get('Authorization') || '';
+      if (request.headers.has('X-Source-Upload')) {
+        return send(await handle(authorization, {
+          op: 'sourcepart', upload: request.headers.get('X-Source-Upload'),
+          number: Number(request.headers.get('X-Source-Part')),
+        }, request));
+      }
       const declaredSize = Number(request.headers.get('Content-Length'));
       if (declaredSize > 1450000) return send({error:'الطلب كبير جدًا.'}, 413);
       const parsed = await readJson(request, 1450000);
       const data = parsed?.data;
       if (data?.op !== 'addsource' && parsed?.size > 32768) return send({error:'الطلب كبير جدًا.'}, 413);
       if (!data || typeof data !== 'object' || Array.isArray(data)) return send({ error: 'صيغة الطلب غير صالحة.' }, 400);
-      const authorization = request.headers.get('Authorization') || '';
-      if (['register','register-owner','sync','suggest','addsource','sources','source','subjects','study','solve','removesource','renamesource'].includes(data.op)) {
+      if (data.op === 'sourcepart') return send({error:'صيغة الطلب غير صالحة.'}, 400);
+      if (['register','register-owner','sync','suggest','sources','source','subjects','study','solve','removesource','renamesource'].includes(data.op)) {
         const allowed = await env.STUDENT_RATE.limit({ key: ip });
         if (!allowed.success) {
           return send({ error: 'انتظر قليلًا ثم حاول مجددًا.' }, 429);
         }
       }
-      return send(await handle(authorization, data));
+      const result = await handle(authorization, data);
+      return result instanceof Response ? result : send(result);
     } catch (error) {
       return send({ error: error.status ? error.message : 'تعذّر تنفيذ الطلب على خدمة الصف.' }, error.status || 500);
     }

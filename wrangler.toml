@@ -10,6 +10,10 @@ binding = "DB"
 database_name = "suggestions-db"
 database_id = "123d5d0c-1fff-45c4-b834-352be7dbb307"
 
+[[r2_buckets]]
+binding = "SOURCE_FILES"
+bucket_name = "qum-dorous-sources"
+
 [[ratelimits]]
 name = "STUDENT_RATE"
 namespace_id = "71040516"
