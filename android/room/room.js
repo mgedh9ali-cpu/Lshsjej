@@ -4,7 +4,7 @@ const main=$('main'), bottomNav=$('#bottom-nav'), pending=new Map();
 let serial=0,revision=0,page='login',name='',owner=false,setup=false,cache,selected,hideTimer;
 let offline=false,hasAccount=false,locked=false,previewUrl=null,cloudUrl='',studentEmail='';
 function rpc(op,data={},progress){
-  if(offline && ['home','subject','source','addSource'].includes(op))return offlineData(op,data);
+  if(offline && ['home','subject','source','addSource','renameSource','remove'].includes(op))return offlineData(op,data);
   const id=++serial;
   return new Promise((resolve,reject)=>{pending.set(id,{resolve,reject,progress});Classroom.request(id,JSON.stringify({...data,op}));});
 }
@@ -161,12 +161,15 @@ function unlock(){
 const symbols=['ϟ','⚗','✿','Aa','∑'];
 const number=new Intl.NumberFormat('ar-SY');
 async function home(){
-  const subjects=[...cache.subjects],grid=wrap('grid');
-  if(!owner&&!locked){
+  const subjects=cache.subjects.map(subject=>({...subject})),grid=wrap('grid');
+  if(!locked){
     try{
       const catalog=await rpc('sharedSubjects');
-      for(const {name:subjectName} of catalog.subjects){
-        if(!subjects.some(subject=>subject.name===subjectName))subjects.push({id:subjects.length+1,name:subjectName,sharedOnly:true});
+      let nextId=Math.max(0,...subjects.map(subject=>subject.id))+1;
+      for(const {name:subjectName,docs} of catalog.subjects){
+        const existing=subjects.find(subject=>subject.name===subjectName);
+        if(existing)existing.docs=(existing.docs||0)+(docs||0);
+        else subjects.push({id:nextId++,name:subjectName,docs:docs||0,sharedOnly:true});
       }
     }catch(err){message(err.message);}
   }
@@ -529,9 +532,67 @@ function sourceForm(subject){
     await go('subject',subject);
   });
 }
+function sourceDialog(title,style){
+  const dialog=el('dialog','','app-dialog '+style);
+  dialog.setAttribute('aria-label',title);
+  dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+  document.body.append(dialog);
+  return dialog;
+}
+function showSourceActions(title, actions){
+  const dialog=sourceDialog(title,'source-actions');
+  dialog.append(el('h2',title),...actions.map(([label,perform,style])=>button(label,async()=>{
+    dialog.close();
+    await perform();
+  },style)),button('إغلاق',()=>dialog.close()));
+  dialog.showModal();
+}
+function renameSourceDialog(title, save){
+  const dialog=sourceDialog('تعديل عنوان المصدر','source-actions');
+  const titleField=field('عنوان المصدر','title','text',title);
+  titleField.querySelector('input').maxLength=180;
+  dialog.append(form('تعديل عنوان المصدر',[titleField],'حفظ',async ({title:next})=>{
+    if(!next.trim())throw Error('اكتب عنوان المصدر.');
+    await save(next.trim());
+    dialog.close();
+  }),button('إلغاء',()=>dialog.close()));
+  dialog.showModal();
+}
+function showSourceImage(title,url){
+  const dialog=sourceDialog(title,'source-viewer');
+  const image=el('img');
+  image.src=url;image.alt=title;
+  const viewport=wrap('source-viewport',image);
+  viewport.tabIndex=0;
+  viewport.setAttribute('aria-label','معاينة الصورة');
+  let zoom=100;
+  const label=el('output');
+  label.setAttribute('aria-live','polite');
+  const out=button('تصغير −',()=>change(-25));
+  const closer=button('تكبير +',()=>change(25));
+  function change(delta){
+    zoom=Math.max(100,Math.min(300,zoom+delta));
+    image.style.width=zoom+'%';
+    label.textContent=number.format(zoom)+'٪';
+    out.setAttribute('aria-disabled',String(zoom===100));
+    closer.setAttribute('aria-disabled',String(zoom===300));
+  }
+  const reset=button('ملاءمة',()=>{change(100-zoom);viewport.scrollTo(0,0);});
+  dialog.append(wrap('source-viewer-head',el('h2',title),button('إغلاق',()=>dialog.close())),
+    viewport,wrap('source-zoom',out,label,closer,reset));
+  change(0);
+  dialog.showModal();
+}
+function sourceMenuButton(title,actions){
+  const menu=button('⋮',()=>showSourceActions(title,actions),'source-menu');
+  menu.setAttribute('aria-label','خيارات '+title);
+  menu.setAttribute('aria-haspopup','dialog');
+  return menu;
+}
 function sharedFeed(subject){
   const list=wrap('registration-list');
-  const status=el('p','','empty-state');
+  const status=el('p','جارٍ تحميل المصادر…','empty-state');
+  status.setAttribute('role','status');
   const controls=wrap('row');
   let loading=false,entries=[],next=null;
   const observer=new IntersectionObserver(visible=>{
@@ -546,33 +607,46 @@ function sharedFeed(subject){
     const image=el('img');
     image.alt=entry.title;
     image.decoding='async';
-    const photo=wrap('source-photo');
-    const status=el('p','جارٍ تحميل الصورة…','empty-state');
-    photo.append(status);
-    photo.loadSourceImage=async()=>{
-      photo.replaceChildren(status);
-      try{
-        const {entry:record}=await rpc('sharedImage',{id:entry.id});
+    let imageTask;
+    const openImage=()=>fetchImage().then(url=>{if(section.isConnected)showSourceImage(entry.title,url);});
+    const preview=button('',openImage,'source-preview');
+    preview.setAttribute('aria-label','فتح صورة '+entry.title);
+    const photo=wrap('source-photo',preview);
+    const loadingImage=el('span','جارٍ تحميل الصورة…','empty-state');
+    preview.append(loadingImage);
+    function fetchImage(){
+      if(!imageTask)imageTask=rpc('sharedImage',{id:entry.id}).then(({entry:record})=>{
+        if(!record.image)throw Error('تعذّر فتح الصورة.');
         image.src=record.image;
-        photo.replaceChildren(image);
-      }catch(err){
-        photo.replaceChildren(el('p',err.message,'empty-state'),button('إعادة تحميل الصورة',photo.loadSourceImage));
-      }
-    };
+        preview.replaceChildren(image);
+        return record.image;
+      }).catch(err=>{
+        imageTask=null;
+        preview.replaceChildren(el('span','تعذّر تحميل الصورة. اضغط للمحاولة مجددًا.','empty-state'));
+        throw err;
+      });
+      return imageTask;
+    }
+    photo.loadSourceImage=()=>fetchImage().catch(()=>{});
     if(!entry.attachment)observer.observe(photo);
-    const metadata=[entry.added_by,subject?null:entry.subject,dateTime(entry.created)].filter(Boolean).join(' · ');
-    const post=wrap('card',el('strong',entry.title),el('small',metadata));
-    if(!entry.attachment)post.append(photo);
-    post.append(button('تنزيل المصدر',()=>rpc('sharedDownload',{id:entry.id})));
-    if(owner&&!entry.approved)post.append(button('اعتماد المصدر',async()=>{
+    const actions=[['تنزيل المصدر',()=>rpc('sharedDownload',{id:entry.id})]];
+    if(owner&&!entry.approved)actions.push(['اعتماد المصدر',async()=>{
       if(!await confirmAction('اعتماد المصدر','راجع المصدر وتأكد من خلوّه من البيانات الشخصية.','اعتماد'))return;
       await rpc('onlineApproveSource',{id:entry.id});await load();
-    }));
-    if(owner||entry.mine)post.append(button('حذف المنشور',async()=>{
-        if(!await confirmAction('حذف المنشور','سيختفي هذا المصدر من صفحة المادة لدى جميع الطلاب.'))return;
-        await rpc('sharedRemove',{id:entry.id});
-        await load();
-      }));
+    }]);
+    if(owner||entry.mine)actions.push(['تعديل العنوان',()=>renameSourceDialog(entry.title,async title=>{
+      await rpc('sharedRename',{id:entry.id,title});await load();
+    })],['حذف المصدر',async()=>{
+      if(!await confirmAction('حذف المصدر','سيُحذف المصدر من مكتبة المادة.'))return;
+      await rpc('sharedRemove',{id:entry.id});await load();
+    },'danger']);
+    const title=button(entry.title,entry.attachment?()=>showSourceActions(entry.title,actions):openImage,'source-title');
+    if(entry.attachment)title.setAttribute('aria-haspopup','dialog');
+    const metadata=[entry.attachment?'ملف':null,entry.added_by,subject?null:entry.subject,dateTime(entry.created)].filter(Boolean).join(' · ');
+    const post=wrap('card source-card',wrap('source-card-head',wrap('source-card-meta',title,el('small',metadata)),
+      sourceMenuButton(entry.title,actions)));
+    if(!entry.approved)post.append(el('small','بانتظار اعتماد المالك','source-pending'));
+    if(!entry.attachment)post.append(photo);
     return post;
   }
   async function load(cursor=null,append=false){
@@ -675,9 +749,30 @@ function newSource(){
   return [button('العودة إلى المصادر',()=>go('subject',selected),'back-action'),
     hero('إضافة مصدر',selected.name),sourceForm(selected)];
 }
-async function source(item){const record=await rpc('source',{id:item.id});const img=el('img');img.src=record.image instanceof Blob?(previewUrl=URL.createObjectURL(record.image)):record.image;img.alt='صورة المصدر';
-  return [button('العودة للمادة',()=>go('subject',selected)),hero(record.title,date(record.created)+(owner&&record.added_by?' · أضافه '+record.added_by:'')),wrap('card',...(record.body?[el('pre',record.body)]:[]),img),owner&&button('حذف المصدر',async()=>{if(await confirmAction('حذف المصدر','سيُحذف هذا المصدر من الصف.')){await rpc('remove',{id:item.id});await go('subject',selected);}})];}
+async function source(item){
+  const record=await rpc('source',{id:item.id});
+  const actions=[
+    ['تعديل العنوان',()=>renameSourceDialog(record.title,async title=>{
+      await rpc('renameSource',{id:item.id,title});await go('source',item);
+    })],
+    ['حذف المصدر',async()=>{
+      if(!await confirmAction('حذف المصدر','سيُحذف المصدر المحفوظ على هذا الهاتف.'))return;
+      await rpc('remove',{id:item.id});await go('subject',selected);
+    },'danger']
+  ];
+  const content=wrap('card source-card',wrap('source-card-head',
+    wrap('source-card-meta',el('h2',record.title),el('small',date(record.created))),sourceMenuButton(record.title,actions)));
+  if(record.body)content.append(el('pre',record.body));
+  if(record.image){
+    const url=record.image instanceof Blob?(previewUrl=URL.createObjectURL(record.image)):record.image;
+    const image=el('img');image.src=url;image.alt=record.title;
+    const preview=button('',()=>showSourceImage(record.title,url),'source-preview');
+    preview.setAttribute('aria-label','فتح صورة '+record.title);
+    preview.append(image);content.append(preview);
+  }
+  return [button('العودة إلى المصادر',()=>go('subject',selected),'back-action'),content];
+}
 async function quiz(item){const q=await rpc('quiz',{id:item.id}),choices=JSON.parse(q.choices),result=el('p');
   return [hero(q.title,selected.name),wrap('card',el('h3',q.question),...choices.map((v,i)=>button(v,async()=>{if(owner){message('معاينة المالك');return;}const score=await rpc('solve',{id:item.id,choice:i});result.textContent=i===score.answer?'إجابة صحيحة':'الإجابة الصحيحة · '+choices[score.answer];})),result),button('العودة للمادة',()=>go('subject',selected))];}
-window.backPage=()=>{if(page==='source'||page==='quiz'||page==='newSource'){go('subject',selected);return true;}if(!owner&&locked)return false;if((name||offline)&&page!=='home'){go('home');return true;}return false;};
+window.backPage=()=>{const dialog=[...document.querySelectorAll('dialog[open]')].at(-1);if(dialog){dialog.close();return true;}if(page==='source'||page==='quiz'||page==='newSource'){go('subject',selected);return true;}if(!owner&&locked)return false;if((name||offline)&&page!=='home'){go('home');return true;}return false;};
 boot().catch(e=>message(e.message));

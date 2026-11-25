@@ -34,6 +34,19 @@ async function offlineData(op,d){
     if(!r)throw Error('المصدر غير موجود.');
     return {title:r.title,body:r.text,image:r.image,created:r.date};
   }
+  if(op==='renameSource'||op==='remove'){
+    await new Promise((resolve,reject)=>{
+      const tx=db.transaction('sources','readwrite'), store=tx.objectStore('sources');
+      tx.oncomplete=resolve;
+      tx.onabort=()=>reject(Error('تعذّر حفظ التعديل.'));
+      if(op==='remove')store.delete(d.id);
+      else{
+        const q=store.get(d.id);
+        q.onsuccess=()=>{if(q.result)store.put({...q.result,title:d.title});else tx.abort();};
+      }
+    });
+    return {};
+  }
   const subject=readings[d.subject-1][0];
   if(op==='subject'){
     const rows=await readRequest(db.transaction('sources').objectStore('sources').index('subject').getAll(subject));

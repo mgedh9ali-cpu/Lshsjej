@@ -290,6 +290,7 @@ public final class RoomActivity extends Activity {
                             case "sharedImage":
                             case "sharedPublish":
                             case "sharedRemove":
+                            case "sharedRename":
                             case "sharedStudy":
                             case "sharedSolve":
                             case "sharedDownload":
@@ -299,6 +300,7 @@ public final class RoomActivity extends Activity {
                                     case "sharedList": actionName="sources";break;
                                     case "sharedPublish": actionName="addsource";break;
                                     case "sharedRemove": actionName="removesource";break;
+                                    case "sharedRename": actionName="renamesource";break;
                                     case "sharedStudy": actionName="study";break;
                                     case "sharedSolve": actionName="solve";break;
                                     default: actionName="source";

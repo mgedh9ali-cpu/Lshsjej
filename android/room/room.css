@@ -444,3 +444,24 @@ form progress { width: 100%; height: 9px; accent-color: #14776a; }
 .app-dialog[open] { display: grid; gap: 13px; }
 .app-dialog::backdrop { background: #0d1d2a99; }
 button.danger { background: #8d253a; color: #fff; border-color: #8d253a; font-weight: 700; }
+
+.source-card { display:grid; gap:10px; min-width:0; }
+.source-card-head,.source-viewer-head { display:flex; justify-content:space-between; align-items:start; gap:8px; }
+.source-card-meta { display:grid; min-width:0; }
+.source-card-meta small { overflow-wrap:anywhere; }
+.source-title { text-align:start; padding:0; overflow-wrap:anywhere; }
+.source-menu { flex:0 0 44px; width:44px; min-height:44px; padding:0; font-size:1.45rem; }
+.source-pending { color:var(--muted); }
+.source-card .source-photo { margin:0; }
+.source-preview { display:block; width:100%; padding:0; overflow:hidden; background:var(--mint-soft); }
+.source-preview img { display:block; width:100%; height:auto; max-height:19rem; object-fit:contain; }
+.source-preview span { display:block; padding:14px; }
+.source-actions { margin:auto auto 0; width:min(100%,36rem); max-height:85vh; overflow:auto; }
+.source-actions > button { width:100%; }
+.source-viewer { width:min(94vw,58rem); max-height:92vh; grid-template-rows:auto minmax(0,1fr) auto; }
+.source-viewer-head h2 { min-width:0; overflow-wrap:anywhere; }
+.source-viewport { direction:ltr; overflow:auto; max-height:62vh; background:var(--mint-soft); border-radius:12px; }
+.source-viewport img { display:block; width:100%; max-width:none; height:auto; max-height:none; }
+.source-zoom { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:6px; }
+.source-zoom button { min-height:44px; }
+.source-zoom button[aria-disabled="true"] { opacity:.55; }

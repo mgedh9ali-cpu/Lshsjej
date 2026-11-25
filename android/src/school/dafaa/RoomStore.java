@@ -288,6 +288,9 @@ final class RoomStore {
         case "progress":{
             int page=p.getInt("page");if(page<1||page>10000)throw new Exception("أدخل رقم صفحة صحيحًا.");
             db.execSQL("UPDATE subjects SET page=? WHERE id=?",new Object[]{page,sub});break;}
+        case "renameSource":{
+            String title=check(p,"title",180);
+            db.execSQL("UPDATE sources SET title=? WHERE id=?",new Object[]{title,id});break;}
         case "remove":db.execSQL("DELETE FROM sources WHERE id=?",new Object[]{id});break;
         case "reply":db.execSQL("UPDATE feedback SET reply=? WHERE id=?",new Object[]{check(p,"body",2000),id});break;
         case "notice":db.execSQL("INSERT INTO posts(title,body,created) VALUES(?,?,?)",new Object[]{check(p,"title",150),check(p,"body",6000),System.currentTimeMillis()});break;
