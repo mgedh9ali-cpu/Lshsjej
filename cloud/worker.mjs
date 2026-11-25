@@ -91,7 +91,7 @@ export default {
       if (data?.op !== 'addsource' && parsed?.size > 32768) return send({error:'الطلب كبير جدًا.'}, 413);
       if (!data || typeof data !== 'object' || Array.isArray(data)) return send({ error: 'صيغة الطلب غير صالحة.' }, 400);
       const authorization = request.headers.get('Authorization') || '';
-      if (['register','register-owner','sync','suggest','addsource','sources','source','subjects','study','solve','removesource'].includes(data.op)) {
+      if (['register','register-owner','sync','suggest','addsource','sources','source','subjects','study','solve','removesource','renamesource'].includes(data.op)) {
         const allowed = await env.STUDENT_RATE.limit({ key: ip });
         if (!allowed.success) {
           return send({ error: 'انتظر قليلًا ثم حاول مجددًا.' }, 429);

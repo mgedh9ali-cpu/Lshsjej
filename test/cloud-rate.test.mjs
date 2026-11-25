@@ -78,10 +78,10 @@ test('Cloudflare requires owner-issued enrollment, binds it to one device, and e
   assert.equal((await call(deviceAuth, 'sync')).body.entries[0].reply, 'رد');
   const photo = { image: 'data:image/jpeg;base64,/9j/AA==', title: 'درس', subject: 'علوم', requestId: secret() };
   assert.equal((await call(deviceAuth, 'addsource', photo)).body.pending, true);
-  assert.deepEqual((await call(deviceAuth, 'sources', { subject: photo.subject })).body.entries, []);
+  assert.equal((await call(deviceAuth, 'sources', { subject: photo.subject })).body.entries[0].approved, 0);
   const page = await call(ownerAuth, 'sources');
   const { id } = page.body.entries[0];
-  assert.equal((await call(deviceAuth, 'source', { id })).status, 404);
+  assert.equal((await call(deviceAuth, 'source', { id })).status, 200);
   assert.equal((await call(ownerAuth, 'approvesource', { id })).status, 200);
   assert.equal((await call(deviceAuth, 'source', { id })).body.entry.image, photo.image);
   assert.equal((await call(ownerAuth, 'blockemail', { email })).status, 200);
@@ -134,4 +134,38 @@ test('the owner invitation page requires the expected Access application and own
   assert.match(await created.text(), /example-invite/);
   assert.equal(sent.auth, ownerAuth);
   assert.equal(sent.data.op, 'create-invite');
+});
+
+test('students joining later can browse published history and only manage their own sources', async t => {
+  const call = fixture(t, { QUM_MAX_STUDENTS: '3' });
+  async function join(address) {
+    const invite = await call(ownerAuth, 'create-invite', { name: 'طالب', email: address });
+    const device = secret();
+    assert.equal(invite.status, 200);
+    assert.equal((await call('Invite ' + invite.body.invite, 'register', { email: address, device })).status, 200);
+    return 'Device ' + device;
+  }
+  const author = await join('author@example.test');
+  const subject = 'مادة قديمة بلا تسجيل في فهرس المواد';
+  const file = { name: 'lesson.pdf', base64: 'SGVsbG8=' };
+  assert.equal((await call(author, 'addsource', { subject, title: 'الملف القديم', file, requestId: secret() })).status, 200);
+  const oldest = (await call(ownerAuth, 'sources', { files: true })).body.entries[0].id;
+  assert.equal((await call(ownerAuth, 'approvesource', { id: oldest })).status, 200);
+  for (let i = 0; i < 20; i++) {
+    assert.equal((await call(ownerAuth, 'addsource', { subject, title: 'لاحق ' + i, file, requestId: secret() })).status, 200);
+  }
+  assert.equal((await call(author, 'addsource', { subject, title: 'خاص حتى الاعتماد', file, requestId: secret() })).status, 200);
+  const pending = (await call(author, 'sources', { subject, files: true })).body.entries[0].id;
+  const newcomer = await join('newcomer@example.test');
+  assert.deepEqual((await call(newcomer, 'subjects')).body.subjects, [{ name: subject, docs: 21 }]);
+  const firstPage = (await call(newcomer, 'sources', { subject, files: true })).body;
+  assert.equal(firstPage.entries.length, 20);
+  assert.deepEqual((await call(newcomer, 'sources', { subject, files: true, before: firstPage.next })).body.entries.map(item => item.id), [oldest]);
+  assert.equal((await call(newcomer, 'source', { id: oldest })).body.entry.file.name, 'lesson.pdf');
+  assert.equal((await call(newcomer, 'source', { id: pending })).status, 404);
+  assert.equal((await call(newcomer, 'renamesource', { id: oldest, title: 'عنوان بديل' })).status, 404);
+  assert.equal((await call(newcomer, 'removesource', { id: oldest })).status, 403);
+  assert.equal((await call(author, 'renamesource', { id: oldest, title: 'العنوان المصحّح' })).status, 200);
+  assert.equal((await call(newcomer, 'source', { id: oldest })).body.entry.title, 'العنوان المصحّح');
+  assert.equal((await call(ownerAuth, 'renamesource', { id: oldest, title: 'عنوان المالك' })).status, 200);
 });

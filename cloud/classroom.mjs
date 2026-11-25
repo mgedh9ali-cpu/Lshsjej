@@ -47,10 +47,14 @@ export function classroom(db, owner, initialize, { maxStudents = 200, limitSugge
     if (!Number.isSafeInteger(id) || id < 1) fail(400, 'المصدر غير صالح.');
     return id;
   }
+  const publishedSource = "(publisher='owner' OR id IN (SELECT source FROM approved_shared_sources))";
   async function sharedSources(data, isOwner, publisher) {
+    const visibility = isOwner ? '' : ' AND (' + publishedSource + ' OR publisher=?)';
+    const viewer = isOwner ? [] : [publisher];
     if (data.op === 'source') {
-      const entry = await db.prepare('SELECT id, subject, title, image, added_by, created FROM shared_sources WHERE id=?').get(sourceId(data.id));
-      if (!entry || (!isOwner && !await db.prepare("SELECT 1 FROM shared_sources WHERE id=? AND (publisher='owner' OR id IN (SELECT source FROM approved_shared_sources))").get(entry.id))) fail(404, 'المصدر غير موجود.');
+      const entry = await db.prepare('SELECT id,subject,title,image,added_by,created FROM shared_sources WHERE id=?' + visibility)
+        .get(sourceId(data.id), ...viewer);
+      if (!entry) fail(404, 'المصدر غير موجود.');
       if(entry.image.startsWith('{')){
         entry.file=JSON.parse(entry.image);delete entry.image;
       }
@@ -58,17 +62,33 @@ export function classroom(db, owner, initialize, { maxStudents = 200, limitSugge
     }
     const before = data.before == null ? Number.MAX_SAFE_INTEGER : sourceId(data.before);
     const all = isOwner && data.subject == null;
-    const columns = `SELECT id, subject, title, added_by, created,
-        CASE WHEN substr(image,1,1)='{' THEN 1 ELSE 0 END AS attachment,
-        CASE WHEN publisher=? THEN 1 ELSE 0 END AS mine, (publisher='owner' OR id IN(SELECT source FROM approved_shared_sources)) AS approved FROM shared_sources`;
-    const compatible = (data.files === true ? '' : " AND substr(image,1,1)<>'{'") +
-      (isOwner ? '' : " AND (publisher='owner' OR id IN (SELECT source FROM approved_shared_sources))");
-    const entries = all
-      ? await db.prepare(columns + ' WHERE id<?' + compatible + ' ORDER BY id DESC LIMIT 21').all(publisher ?? '', before)
-      : await db.prepare(columns + ' WHERE subject=? AND id<?' + compatible + ' ORDER BY id DESC LIMIT 21').all(publisher ?? '', field(data.subject, 100), before);
+    const columns = `SELECT id,subject,title,added_by,created,substr(image,1,1)='{' AS attachment,
+      publisher=? AS mine,${publishedSource} AS approved FROM shared_sources`;
+    const compatible = data.files === true ? '' : " AND substr(image,1,1)<>'{'";
+    const subjectFilter = all ? '' : ' AND subject=?';
+    const args = all ? [] : [field(data.subject, 100)];
+    const entries = await db.prepare(columns + ' WHERE id<?' + subjectFilter + compatible + visibility + ' ORDER BY id DESC LIMIT 21')
+      .all(publisher, before, ...args, ...viewer);
     const more = entries.length > 20;
     if (more) entries.pop();
     return { entries, next: more ? entries.at(-1).id : null };
+  }
+  async function sourceCatalog(publisher, isOwner) {
+    const predicate = isOwner ? '1' : publishedSource + ' OR publisher=?';
+    const args = isOwner ? [] : [publisher];
+    const subjects = await db.prepare(`SELECT name,sum(docs) AS docs FROM (
+      SELECT name,0 AS docs FROM class_subjects
+      UNION ALL SELECT subject,count(*) FROM shared_sources WHERE ${predicate} GROUP BY subject
+    ) GROUP BY name ORDER BY name`).all(...args);
+    return { subjects };
+  }
+  async function renameSource(data, publisher) {
+    const args = [field(data.title,180), sourceId(data.id)];
+    const owned = publisher ? ' AND publisher=?' : '';
+    if (publisher) args.push(publisher);
+    if (!(await db.prepare('UPDATE shared_sources SET title=? WHERE id=?' + owned).run(...args)).changes)
+      fail(404, 'المصدر غير موجود أو لا تملك صلاحية تعديله.');
+    return {};
   }
   async function addSource(data,publisher,author,email) {
     let content=data.image;
@@ -170,6 +190,8 @@ export function classroom(db, owner, initialize, { maxStudents = 200, limitSugge
         case 'status': return {};
         case 'sources': case 'source': return sharedSources(data, true, 'owner');
         case 'report': return ownerReport();
+        case 'subjects': return sourceCatalog('owner',true);
+        case 'renamesource': return renameSource(data);
         case 'addsource': return addSource(data,'owner','المالك');
         case 'study': return studyList(data);
         case 'addsubject': await db.prepare('INSERT OR IGNORE INTO class_subjects(name) VALUES(?)').run(field(data.name,80)); return {};
@@ -264,7 +286,7 @@ export function classroom(db, owner, initialize, { maxStudents = 200, limitSugge
     }
     const deviceToken = authorization.match(/^Device ([a-zA-Z0-9_-]{43})$/)?.[1];
     if (!deviceToken || (data.device !== undefined && deviceToken !== data.device)) unauthorized();
-    if (!['sync','suggest','sources','source','addsource','removesource','study','solve','subjects'].includes(data.op)) fail(400, 'العملية غير متاحة.');
+    if (!['sync','suggest','sources','source','addsource','removesource','renamesource','study','solve','subjects'].includes(data.op)) fail(400, 'العملية غير متاحة.');
     const student = hash(deviceToken);
     await initialize();
     const registration = await db.prepare(`
@@ -277,7 +299,8 @@ export function classroom(db, owner, initialize, { maxStudents = 200, limitSugge
       case 'sources': case 'source': return sharedSources(data, false, student);
       case 'study': return studyList(data);
       case 'solve': return solveLesson(data);
-      case 'subjects': return {subjects:await db.prepare('SELECT name FROM class_subjects ORDER BY name LIMIT 100').all()};
+      case 'subjects': return sourceCatalog(student,false);
+      case 'renamesource': return renameSource(data,student);
       case 'removesource':
         if(!(await db.prepare('DELETE FROM shared_sources WHERE id=? AND publisher=?').run(sourceId(data.id),student)).changes)
           fail(403,'يمكنك حذف المصادر التي نشرتها فقط.');
