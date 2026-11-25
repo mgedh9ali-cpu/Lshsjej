@@ -40,13 +40,14 @@ function fixture(t, option = {}) {
     },
     ...option,
   };
-  return async (authorization, op, data = {}) => {
+  return async (authorization, op, data = {}, binary) => {
     const request = new Request('https://example.test/v1/classroom', {
-      method: 'POST', headers: { Authorization: authorization, 'CF-Connecting-IP': ip },
-      body: JSON.stringify({ op, ...data }),
+      method: 'POST', headers: { Authorization: authorization, 'CF-Connecting-IP': ip, ...binary?.headers },
+      body: binary?.body ?? JSON.stringify({ op, ...data }),
     });
     const result = await worker.fetch(request, env);
-    return { status: result.status, body: await result.json() };
+    return { status: result.status, body: result.headers.get('Content-Type') === 'application/octet-stream'
+      ? await result.text() : await result.json() };
   };
 }
 
@@ -168,4 +169,77 @@ test('students joining later can browse published history and only manage their 
   assert.equal((await call(author, 'renamesource', { id: oldest, title: 'العنوان المصحّح' })).status, 200);
   assert.equal((await call(newcomer, 'source', { id: oldest })).body.entry.title, 'العنوان المصحّح');
   assert.equal((await call(ownerAuth, 'renamesource', { id: oldest, title: 'عنوان المالك' })).status, 200);
+});
+
+test('students upload more than ten sources without using the suggestion allowance', async t => {
+  const call = fixture(t, { SUGGESTION_RATE: { limit: async () => ({ success: false }) } });
+  const { body: { invite } } = await call(ownerAuth, 'create-invite', { name: 'طالب', email });
+  const device = secret();
+  assert.equal((await call('Invite ' + invite, 'register', { device, email })).status, 200);
+  for (let i = 0; i < 12; i++) {
+    const result = await call('Device ' + device, 'addsource', {
+      requestId: secret(), title: 'درس ' + i, subject: 'علوم', image: 'data:image/jpeg;base64,/9j/AA==',
+    });
+    assert.deepEqual(result, { status: 200, body: { pending: true } });
+  }
+  assert.equal((await call(ownerAuth, 'sources')).body.entries.length, 12);
+});
+
+test('multipart sources enforce file size, retry safely and require classroom access to download', async t => {
+  const objects = new Map();
+  let uploaded = new Map();
+  const call = fixture(t, { SOURCE_FILES: {
+    async createMultipartUpload() { uploaded = new Map(); return { uploadId: secret() }; },
+    resumeMultipartUpload(key) {
+      return {
+        async uploadPart(partNumber, bytes) {
+          uploaded.set(partNumber, bytes.byteLength);
+          return { partNumber, etag: String(partNumber) };
+        },
+        async complete(parts) {
+          assert.equal(parts.length, uploaded.size);
+          const object = { size: [...uploaded.values()].reduce((sum, bytes) => sum + bytes, 0) };
+          objects.set(key, object);
+          return object;
+        },
+      };
+    },
+    async head(key) { return objects.get(key); },
+    async get(key) { return objects.has(key) ? { size: objects.get(key).size, body: 'contents' } : null; },
+    async delete(key) { objects.delete(key); },
+  } });
+  const { body: { invite } } = await call(ownerAuth, 'create-invite', { name: 'طالب', email });
+  const device = secret();
+  const student = 'Device ' + device;
+  assert.equal((await call('Invite ' + invite, 'register', { device, email })).status, 200);
+  const details = { name: 'lesson.pdf', title: 'درس', subject: 'علوم', requestId: secret() };
+  assert.equal((await call(student, 'startsource', { ...details, size: 600_000_001 })).status, 413);
+  const { status, body: { upload, partSize } } = await call(student, 'startsource', { ...details, size: 600_000_000 });
+  assert.equal(status, 200);
+  const sendPart = (auth, number, body, token = upload) => call(auth, 'sourcepart', {}, {
+    headers: { 'X-Source-Upload': token, 'X-Source-Part': String(number), 'Content-Length': String(body.length) }, body,
+  });
+  const buffer = new Uint8Array(partSize);
+  assert.equal((await sendPart(ownerAuth, 1, buffer)).status, 400);
+  assert.equal((await sendPart(student, 1, buffer.subarray(0, 1))).status, 400);
+  const parts = [];
+  for (let number = 1, remaining = 600_000_000; remaining > 0; number++) {
+    const bytes = buffer.subarray(0, Math.min(partSize, remaining));
+    const part = await sendPart(student, number, bytes);
+    assert.equal(part.status, 200);
+    parts.push(part.body);
+    remaining -= bytes.length;
+  }
+  const finalize = () => call(student, 'finishsource', { upload, parts });
+  assert.equal((await finalize()).status, 200);
+  assert.equal((await finalize()).status, 200);
+  assert.deepEqual((await call(student, 'startsource', { ...details, size: 600_000_000 })).body, { saved: true });
+  const { body: { entries } } = await call(ownerAuth, 'sources', { files: true });
+  assert.equal(entries.length, 1);
+  const { id } = entries[0];
+  assert.deepEqual((await call(student, 'source', { id })).body.entry.file, { name: details.name, size: 600_000_000 });
+  assert.equal((await call('Device ' + secret(), 'downloadsource', { id })).status, 401);
+  assert.deepEqual(await call(student, 'downloadsource', { id }), { status: 200, body: 'contents' });
+  assert.equal((await call(student, 'removesource', { id })).status, 200);
+  assert.equal(objects.size, 0);
 });

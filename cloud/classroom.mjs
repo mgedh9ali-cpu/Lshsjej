@@ -35,7 +35,7 @@ function normalizedEmail(value) {
 const devicePattern = /^[a-zA-Z0-9_-]{43}$/;
 const hash = value => digest(value).toString('hex');
 const unauthorized = () => fail(401, 'اربط الجهاز بدعوة من مالك الصف.');
-export function classroom(db, owner, initialize, { maxStudents = 200, limitSuggestion = async () => {}, ownerDeviceHash } = {}) {
+export function classroom(db, owner, initialize, { maxStudents = 200, limitSuggestion = async () => {}, ownerDeviceHash, files } = {}) {
   const notices = () => db.prepare('SELECT * FROM notices ORDER BY id DESC LIMIT 100').all();
   const feedback = student => {
     const query = 'SELECT f.id,f.body,f.created,f.reply,s.name FROM feedback f JOIN students s ON s.id=f.student';
@@ -48,15 +48,57 @@ export function classroom(db, owner, initialize, { maxStudents = 200, limitSugge
     return id;
   }
   const publishedSource = "(publisher='owner' OR id IN (SELECT source FROM approved_shared_sources))";
+  async function readSource(id, isOwner, publisher) {
+    const visibility = isOwner ? '' : ' AND (' + publishedSource + ' OR publisher=?)';
+    const entry = await db.prepare('SELECT id,subject,title,image,added_by,created FROM shared_sources WHERE id=?' + visibility)
+      .get(sourceId(id), ...(isOwner ? [] : [publisher]));
+    if (!entry) fail(404, 'المصدر غير موجود.');
+    return entry;
+  }
+  async function downloadSource(data, isOwner, publisher) {
+    const { image } = await readSource(data.id, isOwner, publisher);
+    const file = image.startsWith('{') ? JSON.parse(image) : null;
+    if (!file?.key) fail(404, 'الملف غير موجود.');
+    return files.download(file);
+  }
+  async function removeSource(data, publisher) {
+    const id = sourceId(data.id);
+    const filter = ' WHERE id=?' + (publisher ? ' AND publisher=?' : '');
+    const args = publisher ? [id, publisher] : [id];
+    const entry = await db.prepare('SELECT image FROM shared_sources' + filter).get(...args);
+    if (!entry && publisher) fail(403, 'يمكنك حذف المصادر التي نشرتها فقط.');
+    await db.prepare('DELETE FROM shared_sources' + filter).run(...args);
+    if (entry?.image.startsWith('{')) {
+      const { key } = JSON.parse(entry.image);
+      if (key) await files.remove(key);
+    }
+    return {};
+  }
+  async function startSource(data, publisher) {
+    const requestId = identifier(data.requestId);
+    if (await db.prepare('SELECT 1 FROM shared_sources WHERE publisher=? AND request_id=?').get(publisher, requestId))
+      return { saved: true };
+    return files.start({ size: data.size, name: field(data.name, 180), title: field(data.title, 180),
+      subject: field(data.subject, 100), requestId }, publisher);
+  }
+  async function finishSource(data, publisher, author, email) {
+    return files.finish(data, publisher, async (session, file) => {
+      const result = await saveSource(session, publisher, author, email, JSON.stringify(file));
+      const saved = await db.prepare('SELECT image FROM shared_sources WHERE publisher=? AND request_id=?')
+        .get(publisher, session.requestId);
+      if (saved?.image !== JSON.stringify(file)) await files.remove(file.key);
+      return result;
+    });
+  }
   async function sharedSources(data, isOwner, publisher) {
     const visibility = isOwner ? '' : ' AND (' + publishedSource + ' OR publisher=?)';
     const viewer = isOwner ? [] : [publisher];
     if (data.op === 'source') {
-      const entry = await db.prepare('SELECT id,subject,title,image,added_by,created FROM shared_sources WHERE id=?' + visibility)
-        .get(sourceId(data.id), ...viewer);
-      if (!entry) fail(404, 'المصدر غير موجود.');
-      if(entry.image.startsWith('{')){
-        entry.file=JSON.parse(entry.image);delete entry.image;
+      const entry = await readSource(data.id, isOwner, publisher);
+      if (entry.image.startsWith('{')) {
+        const { key, ...file } = JSON.parse(entry.image);
+        entry.file = file;
+        delete entry.image;
       }
       return { entry };
     }
@@ -101,6 +143,9 @@ export function classroom(db, owner, initialize, { maxStudents = 200, limitSugge
       content=JSON.stringify({name,base64});
     }else if(typeof content!=='string' || content.length>550000 ||
        !/^data:image\/jpeg;base64,\/9j\/[A-Za-z0-9+/]*={0,2}$/.test(content))fail(400,'أرسل صورة JPEG صالحة.');
+    return saveSource(data, publisher, author, email, content);
+  }
+  async function saveSource(data, publisher, author, email, content) {
     const requestId=identifier(data.requestId);
     const fields=[publisher,requestId,field(data.subject,100),field(data.title,180),content,author,Date.now()];
     if(!email){
@@ -108,13 +153,10 @@ export function classroom(db, owner, initialize, { maxStudents = 200, limitSugge
       return {};
     }
     const saved=await db.prepare(`INSERT OR IGNORE INTO shared_sources(publisher,request_id,subject,title,image,added_by,created)
-      SELECT ?,?,?,?,?,?,? WHERE ${allowedStudent} AND (SELECT count(*) FROM shared_sources WHERE publisher=? AND created>?)<5`)
-      .run(...fields,email,publisher,Date.now()-86400000);
-    if(!saved.changes){
-      if(await db.prepare('SELECT 1 FROM blocked_emails WHERE email=?').get(email))fail(403,blockedMessage);
-      if(!await db.prepare('SELECT 1 FROM shared_sources WHERE publisher=? AND request_id=?').get(publisher,requestId))
-        fail(429,'بلغت حد المساهمات خلال 24 ساعة.');
-    }
+      SELECT ?,?,?,?,?,?,? WHERE ${allowedStudent}`)
+      .run(...fields,email);
+    if (!saved.changes && await db.prepare('SELECT 1 FROM blocked_emails WHERE email=?').get(email))
+      fail(403, blockedMessage);
     return {pending:true};
   }
   async function studyList(data){
@@ -164,7 +206,7 @@ export function classroom(db, owner, initialize, { maxStudents = 200, limitSugge
     const subjects = await db.prepare('SELECT subject,count(*) AS total FROM shared_sources GROUP BY subject ORDER BY total DESC,subject').all();
     return {totals, subjects};
   }
-  return async (authorization, data) => {
+  return async (authorization, data, request) => {
     if (typeof owner !== 'string' || !/^[a-zA-Z0-9_-]{32,}$/.test(owner)) {
       fail(503, 'الربط عبر الإنترنت قيد الإعداد.');
     }
@@ -193,6 +235,11 @@ export function classroom(db, owner, initialize, { maxStudents = 200, limitSugge
         case 'subjects': return sourceCatalog('owner',true);
         case 'renamesource': return renameSource(data);
         case 'addsource': return addSource(data,'owner','المالك');
+        case 'startsource': return startSource(data, 'owner');
+        case 'sourcepart': return files.part(data, 'owner', request);
+        case 'finishsource': return finishSource(data, 'owner', 'المالك');
+        case 'abortsource': return files.abort(data, 'owner');
+        case 'downloadsource': return downloadSource(data, true, 'owner');
         case 'study': return studyList(data);
         case 'addsubject': await db.prepare('INSERT OR IGNORE INTO class_subjects(name) VALUES(?)').run(field(data.name,80)); return {};
         case 'addlesson': return addLesson(data);
@@ -201,11 +248,7 @@ export function classroom(db, owner, initialize, { maxStudents = 200, limitSugge
           await db.prepare('INSERT OR IGNORE INTO approved_shared_sources(source) SELECT id FROM shared_sources WHERE id=?').run(id);
           return {};
         }
-        case 'removesource': {
-          const id = sourceId(data.id);
-          await db.prepare('DELETE FROM shared_sources WHERE id=?').run(id);
-          return {};
-        }
+        case 'removesource': return removeSource(data);
         case 'notices': return { notices: await notices() };
         case 'publish':
           await db.prepare('INSERT INTO notices(title,body,created) VALUES(?,?,?)').run(field(data.title, 180), field(data.body, 12000), Date.now());
@@ -286,7 +329,7 @@ export function classroom(db, owner, initialize, { maxStudents = 200, limitSugge
     }
     const deviceToken = authorization.match(/^Device ([a-zA-Z0-9_-]{43})$/)?.[1];
     if (!deviceToken || (data.device !== undefined && deviceToken !== data.device)) unauthorized();
-    if (!['sync','suggest','sources','source','addsource','removesource','renamesource','study','solve','subjects'].includes(data.op)) fail(400, 'العملية غير متاحة.');
+    if (!['sync','suggest','sources','source','addsource','removesource','renamesource','study','solve','subjects','startsource','sourcepart','finishsource','abortsource','downloadsource'].includes(data.op)) fail(400, 'العملية غير متاحة.');
     const student = hash(deviceToken);
     await initialize();
     const registration = await db.prepare(`
@@ -294,18 +337,20 @@ export function classroom(db, owner, initialize, { maxStudents = 200, limitSugge
       LEFT JOIN blocked_emails b ON b.email=i.email WHERE i.student=?`).get(student);
     if (!registration) unauthorized();
     if (registration.blocked) fail(403, blockedMessage);
-    if (['suggest','addsource'].includes(data.op)) await limitSuggestion(student);
+    if (data.op === 'suggest') await limitSuggestion(student);
     switch (data.op) {
       case 'sources': case 'source': return sharedSources(data, false, student);
       case 'study': return studyList(data);
       case 'solve': return solveLesson(data);
       case 'subjects': return sourceCatalog(student,false);
       case 'renamesource': return renameSource(data,student);
-      case 'removesource':
-        if(!(await db.prepare('DELETE FROM shared_sources WHERE id=? AND publisher=?').run(sourceId(data.id),student)).changes)
-          fail(403,'يمكنك حذف المصادر التي نشرتها فقط.');
-        return {};
-      case 'addsource': return addSource(data,student,registration.name,registration.email);
+      case 'removesource': return removeSource(data, student);
+      case 'addsource': return addSource(data, student, registration.name, registration.email);
+      case 'startsource': return startSource(data, student);
+      case 'sourcepart': return files.part(data, student, request);
+      case 'finishsource': return finishSource(data, student, registration.name, registration.email);
+      case 'abortsource': return files.abort(data, student);
+      case 'downloadsource': return downloadSource(data, false, student);
       case 'sync': return { notices: await notices(), entries: await feedback(student) };
       case 'suggest': {
         const id = digest(student + ':' + identifier(data.requestId)).toString('hex');
