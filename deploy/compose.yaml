@@ -9,14 +9,30 @@ services:
       SCHOOL_DB: /app/data/school.sqlite
       SCHOOL_SECURE: "1"
       SCHOOL_FONT_DIR: /app/fonts
+      SCHOOL_TRUSTED_PROXY: 172.30.218.2
+    networks: [school-network]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
     volumes:
       - school-data:/app/data
       - ./fonts:/app/fonts:ro
       - ./backups:/app/backups
     restart: unless-stopped
   proxy:
-    image: caddy:2-alpine
-    env_file: ../.env
+    image: caddy:2.11.9-alpine
+    environment:
+      STUDENT_ORIGIN: ${STUDENT_ORIGIN:?Set STUDENT_ORIGIN}
+      ADMIN_ORIGIN: ${ADMIN_ORIGIN:?Set ADMIN_ORIGIN}
+      STUDENT_PORT: ${STUDENT_PORT:-3000}
+      ADMIN_PORT: ${ADMIN_PORT:-3001}
+      ADMIN_ALLOWED_CIDRS: ${ADMIN_ALLOWED_CIDRS:-127.0.0.1/32 ::1/128}
+    networks:
+      school-network:
+        ipv4_address: 172.30.218.2
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
     ports: ["80:80", "443:443"]
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
@@ -28,3 +44,8 @@ volumes:
   school-data:
   caddy-data:
   caddy-config:
+networks:
+  school-network:
+    ipam:
+      config:
+        - subnet: 172.30.218.0/24

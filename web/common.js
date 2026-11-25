@@ -12,6 +12,36 @@ export function el(tag, props = {}, ...children) {
 export const button = (label, click, className = 'secondary', attrs = {}) =>
   el('button', { type: 'button', class: className, ...attrs, onclick: click }, label);
 export const heading = (title, subtitle) => el('section', { class: 'hero' }, el('h1', {}, title), subtitle && el('p', {}, subtitle));
+const siteTitle = document.title;
+export function focusPage() {
+  const title = app.querySelector('h1');
+  if (!title) return;
+  document.title = title.textContent + ' · ' + siteTitle;
+  title.tabIndex = -1;
+  title.focus({ preventScroll: true });
+}
+let activeRoutes;
+export function routeButton(label, path, className, attrs) {
+  return button(label, () => {
+    if (location.hash.slice(1) === path) activeRoutes?.();
+    else location.hash = path;
+  }, className, { ...attrs, 'data-route': path });
+}
+export function installRoutes(resolve, fallback) {
+  if (activeRoutes) window.removeEventListener('hashchange', activeRoutes);
+  activeRoutes = () => {
+    const path = location.hash.slice(1);
+    const route = resolve(path) || resolve(fallback);
+    const base = path.split('/')[0] || fallback;
+    for (const control of nav.querySelectorAll('[data-route]')) {
+      if (control.dataset.route === base) control.setAttribute('aria-current', 'page');
+      else control.removeAttribute('aria-current');
+    }
+    route();
+  };
+  window.addEventListener('hashchange', activeRoutes);
+  activeRoutes();
+}
 export const line = (label, control) => el('label', { class: 'field' }, label, control);
 export const input = (name, props = {}) => el('input', { name, ...props });
 export const select = (name, items) => el('select', { name }, items.map(([value, label]) => el('option', { value }, label)));
@@ -54,12 +84,23 @@ export function errorView(error) {
 export function login(area, ready) {
   nav.replaceChildren();
   if (area === 'student') {
+    const loginId = input('username', { autocomplete: 'username', required: true, dir: 'ltr' });
+    const loginLabel = line('رمز الطالب', loginId);
+    const switchMode = button('استخدام الاسم الكامل', () => {
+      const byName = loginId.name === 'username';
+      loginId.name = byName ? 'name' : 'username';
+      loginId.dir = byName ? 'auto' : 'ltr';
+      loginLabel.firstChild.textContent = byName ? 'الاسم الكامل' : 'رمز الطالب';
+      switchMode.textContent = byName ? 'استخدام رمز الطالب' : 'استخدام الاسم الكامل';
+      loginId.focus();
+    });
     app.replaceChildren(el('div', { class: 'simple-login' }, form([
       el('h1', {}, 'تسجيل الدخول'),
       location.protocol === 'https:' && !navigator.userAgent.includes('QumDorousAndroid') && el('a', { href: 'qumdorous://join?school=' + encodeURIComponent(location.origin) }, 'فتح الصف في تطبيق أندرويد'),
-      line('الاسم', input('name', { autocomplete: 'username', required: true })),
+      loginLabel, switchMode,
       line('كلمة السر', input('password', { type: 'password', autocomplete: 'current-password', required: true })),
     ], 'دخول', async data => ready(await api('/login', data)))));
+    focusPage();
     return;
   }
   app.replaceChildren(el('div', { class: 'login-layout' },
@@ -108,7 +149,7 @@ export function archiveView(archive, openDocument, removeImage, filter = '') {
   }
   const groups = [...days].sort(([a], [b]) => b.localeCompare(a)).filter(([, entries]) => entries.length);
   return groups.length ? groups.map(([day, entries]) => el('section', { class: 'card archive-day' },
-    el('h2', {}, archiveDate.format(new Date(day + 'T12:00:00Z'))), el('div', { class: 'stack' }, entries))) : [empty('ما في صور أو مستندات مطابقة.')];
+    el('h2', {}, archiveDate.format(new Date(day + 'T12:00:00Z'))), el('div', { class: 'stack' }, entries))) : [empty('لا توجد صور أو مستندات مطابقة.')];
 }
 
 export function imageFile(file) {

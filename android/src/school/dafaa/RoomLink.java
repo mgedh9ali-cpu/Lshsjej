@@ -16,13 +16,20 @@ final class RoomLink {
     static final int LIMIT=850000;
     static final String ALIAS="qum-classroom-tls";
     private SSLServerSocket server;
-    private final ThreadPoolExecutor pool=new ThreadPoolExecutor(4,4,0,TimeUnit.SECONDS,new ArrayBlockingQueue<Runnable>(16));
+    private final ThreadPoolExecutor pool=new ThreadPoolExecutor(4,4,0,TimeUnit.SECONDS,new ArrayBlockingQueue<Runnable>(60));
     private String fingerprint;
     private final RoomStore store;
     RoomLink(RoomStore store){this.store=store;}
     static String fingerprint(X509Certificate cert)throws Exception{
         byte[] digest=MessageDigest.getInstance("SHA-256").digest(cert.getEncoded());
         StringBuilder out=new StringBuilder();for(byte b:digest)out.append(String.format(Locale.US,"%02x",b&255));return out.toString();
+    }
+    private static String[] secureProtocols(String[] supported) {
+        List<String> protocols=new ArrayList<>();
+        for(String protocol:supported)
+            if("TLSv1.2".equals(protocol)||"TLSv1.3".equals(protocol))protocols.add(protocol);
+        if(protocols.isEmpty())throw new IllegalStateException("TLS 1.2 or later is required");
+        return protocols.toArray(new String[0]);
     }
     synchronized void start()throws Exception{
         if(server!=null)return;
@@ -50,6 +57,7 @@ final class RoomLink {
         };
         SSLContext context=SSLContext.getInstance("TLS");context.init(new KeyManager[]{identity},null,null);
         final SSLServerSocket listener=(SSLServerSocket)context.getServerSocketFactory().createServerSocket(PORT);
+        listener.setEnabledProtocols(secureProtocols(listener.getSupportedProtocols()));
         server=listener;
         new Thread(()->{
             while(!listener.isClosed()){
@@ -106,6 +114,7 @@ final class RoomLink {
             }};
         SSLContext ctx=SSLContext.getInstance("TLS");ctx.init(null,new TrustManager[]{trust},null);
         try(SSLSocket socket=(SSLSocket)ctx.getSocketFactory().createSocket()){
+            socket.setEnabledProtocols(secureProtocols(socket.getSupportedProtocols()));
             socket.connect(new InetSocketAddress(host,PORT),4000);socket.setSoTimeout(12000);socket.startHandshake();
             send(socket,req);return receive(socket);
         }catch(IOException e){throw new Exception("تعذّر الوصول لهاتف المالك. تحقق من شبكة الواي فاي ورمز الربط وفتح لوحة المالك.");}

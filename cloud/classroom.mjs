@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const digest = text => createHash('sha256').update(text).digest();
 const fail = (status, message) => { throw Object.assign(Error(message), { status }); };
@@ -10,7 +10,32 @@ function identifier(value) {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{32,64}$/.test(value)) fail(400, 'معرّف العملية غير صالح.');
   return value;
 }
-export function classroom(db, owner, invite, initialize, limitSuggestion = async () => {}) {
+export const registrationSchema = [
+  'CREATE TABLE IF NOT EXISTS student_emails (student TEXT PRIMARY KEY, email TEXT NOT NULL)',
+  'CREATE INDEX IF NOT EXISTS student_emails_email ON student_emails(email)',
+  'CREATE TABLE IF NOT EXISTS blocked_emails (email TEXT PRIMARY KEY)',
+  'CREATE TABLE IF NOT EXISTS owner_invites (code TEXT PRIMARY KEY, expires INTEGER NOT NULL, device TEXT UNIQUE)',
+  'CREATE TABLE IF NOT EXISTS classroom_invites (code TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, expires INTEGER NOT NULL, student TEXT UNIQUE, claimed INTEGER)',
+  `CREATE TRIGGER IF NOT EXISTS claim_classroom_invite AFTER UPDATE OF student ON classroom_invites
+    WHEN OLD.student IS NULL AND NEW.student IS NOT NULL BEGIN
+      INSERT INTO students(id,name,created) VALUES(NEW.student,NEW.name,NEW.claimed)
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name;
+      INSERT INTO student_emails(student,email) VALUES(NEW.student,NEW.email)
+      ON CONFLICT(student) DO UPDATE SET email=excluded.email;
+    END;`,
+];
+const blockedMessage = 'هذا البريد محظور من الصف.';
+const allowedStudent = 'NOT EXISTS (SELECT 1 FROM blocked_emails WHERE email=?)';
+function normalizedEmail(value) {
+  const email = field(value, 254).toLowerCase();
+  if (!/^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(email) ||
+      email.indexOf('@') > 64) fail(400, 'أدخل بريدًا إلكترونيًا صالحًا.');
+  return email;
+}
+const devicePattern = /^[a-zA-Z0-9_-]{43}$/;
+const hash = value => digest(value).toString('hex');
+const unauthorized = () => fail(401, 'اربط الجهاز بدعوة من مالك الصف.');
+export function classroom(db, owner, initialize, { maxStudents = 200, limitSuggestion = async () => {}, ownerDeviceHash } = {}) {
   const notices = () => db.prepare('SELECT * FROM notices ORDER BY id DESC LIMIT 100').all();
   const feedback = student => {
     const query = 'SELECT f.id,f.body,f.created,f.reply,s.name FROM feedback f JOIN students s ON s.id=f.student';
@@ -18,46 +43,252 @@ export function classroom(db, owner, invite, initialize, limitSuggestion = async
       ? db.prepare(query + ' WHERE f.student=? ORDER BY f.created DESC LIMIT 100').all(student)
       : db.prepare(query + ' ORDER BY f.created DESC LIMIT 200').all();
   };
+  function sourceId(id) {
+    if (!Number.isSafeInteger(id) || id < 1) fail(400, 'المصدر غير صالح.');
+    return id;
+  }
+  async function sharedSources(data, isOwner, publisher) {
+    if (data.op === 'source') {
+      const entry = await db.prepare('SELECT id, subject, title, image, added_by, created FROM shared_sources WHERE id=?').get(sourceId(data.id));
+      if (!entry || (!isOwner && !await db.prepare("SELECT 1 FROM shared_sources WHERE id=? AND (publisher='owner' OR id IN (SELECT source FROM approved_shared_sources))").get(entry.id))) fail(404, 'المصدر غير موجود.');
+      if(entry.image.startsWith('{')){
+        entry.file=JSON.parse(entry.image);delete entry.image;
+      }
+      return { entry };
+    }
+    const before = data.before == null ? Number.MAX_SAFE_INTEGER : sourceId(data.before);
+    const all = isOwner && data.subject == null;
+    const columns = `SELECT id, subject, title, added_by, created,
+        CASE WHEN substr(image,1,1)='{' THEN 1 ELSE 0 END AS attachment,
+        CASE WHEN publisher=? THEN 1 ELSE 0 END AS mine, (publisher='owner' OR id IN(SELECT source FROM approved_shared_sources)) AS approved FROM shared_sources`;
+    const compatible = (data.files === true ? '' : " AND substr(image,1,1)<>'{'") +
+      (isOwner ? '' : " AND (publisher='owner' OR id IN (SELECT source FROM approved_shared_sources))");
+    const entries = all
+      ? await db.prepare(columns + ' WHERE id<?' + compatible + ' ORDER BY id DESC LIMIT 21').all(publisher ?? '', before)
+      : await db.prepare(columns + ' WHERE subject=? AND id<?' + compatible + ' ORDER BY id DESC LIMIT 21').all(publisher ?? '', field(data.subject, 100), before);
+    const more = entries.length > 20;
+    if (more) entries.pop();
+    return { entries, next: more ? entries.at(-1).id : null };
+  }
+  async function addSource(data,publisher,author,email) {
+    let content=data.image;
+    if(data.file!=null){
+      const name=field(data.file.name,180);
+      const {base64}=data.file;
+      if(/[\x00-\x1f\x7f/\\]/.test(name) || typeof base64!=='string' || !base64 ||
+         base64.length>1398104 || base64.length%4!==0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64) ||
+         Buffer.from(base64,'base64').length>1048576)fail(400,'اختر ملفًا صالحًا حتى ١ ميغابايت.');
+      content=JSON.stringify({name,base64});
+    }else if(typeof content!=='string' || content.length>550000 ||
+       !/^data:image\/jpeg;base64,\/9j\/[A-Za-z0-9+/]*={0,2}$/.test(content))fail(400,'أرسل صورة JPEG صالحة.');
+    const requestId=identifier(data.requestId);
+    const fields=[publisher,requestId,field(data.subject,100),field(data.title,180),content,author,Date.now()];
+    if(!email){
+      await db.prepare('INSERT OR IGNORE INTO shared_sources(publisher,request_id,subject,title,image,added_by,created) VALUES(?,?,?,?,?,?,?)').run(...fields);
+      return {};
+    }
+    const saved=await db.prepare(`INSERT OR IGNORE INTO shared_sources(publisher,request_id,subject,title,image,added_by,created)
+      SELECT ?,?,?,?,?,?,? WHERE ${allowedStudent} AND (SELECT count(*) FROM shared_sources WHERE publisher=? AND created>?)<5`)
+      .run(...fields,email,publisher,Date.now()-86400000);
+    if(!saved.changes){
+      if(await db.prepare('SELECT 1 FROM blocked_emails WHERE email=?').get(email))fail(403,blockedMessage);
+      if(!await db.prepare('SELECT 1 FROM shared_sources WHERE publisher=? AND request_id=?').get(publisher,requestId))
+        fail(429,'بلغت حد المساهمات خلال 24 ساعة.');
+    }
+    return {pending:true};
+  }
+  async function studyList(data){
+    const entries=await db.prepare('SELECT id,title,kind,body,created FROM shared_lessons WHERE subject=? ORDER BY id DESC LIMIT 100')
+      .all(field(data.subject,100));
+    return {entries:entries.map(entry=>entry.kind==='quiz'?{...entry,body:JSON.parse(entry.body)}:entry)};
+  }
+  async function addLesson(data){
+    const subject=field(data.subject,100), title=field(data.title,180);
+    let body,answer=null;
+    switch(data.kind){
+      case 'summary': body=field(data.body,12000); break;
+      case 'link': {
+        try{
+          const url=new URL(field(data.body,2000));
+          if(url.protocol!=='https:'||url.username||url.password)throw Error();
+          body=url.href;
+        }catch{fail(400,'أدخل رابط اختبار يبدأ بـ HTTPS.');}
+        break;
+      }
+      case 'quiz': {
+        if(!Array.isArray(data.choices)||data.choices.length<2||data.choices.length>8||
+           !Number.isInteger(data.answer)||data.answer<0||data.answer>=data.choices.length)fail(400,'أدخل الخيارات وحدّد الإجابة الصحيحة.');
+        body=JSON.stringify({question:field(data.question,1800),choices:data.choices.map(choice=>field(choice,500))});
+        answer=data.answer;
+        break;
+      }
+      default: fail(400,'نوع المحتوى غير صالح.');
+    }
+    await db.prepare('INSERT INTO shared_lessons(subject,title,kind,body,answer,created) VALUES(?,?,?,?,?,?)')
+      .run(subject,title,data.kind,body,answer,Date.now());
+    return {};
+  }
+  async function solveLesson(data){
+    const quiz=await db.prepare("SELECT body,answer FROM shared_lessons WHERE id=? AND kind='quiz'").get(sourceId(data.id));
+    if(!quiz)fail(404,'الاختبار غير موجود.');
+    if(!Number.isInteger(data.choice)||data.choice<0||data.choice>=JSON.parse(quiz.body).choices.length)
+      fail(400,'اختر إجابة صالحة.');
+    return {correct:data.choice===quiz.answer,answer:quiz.answer};
+  }
+  async function ownerReport() {
+    const totals = await db.prepare(`SELECT
+      (SELECT count(*) FROM students) AS students,
+      (SELECT count(*) FROM shared_sources) AS sources,
+      (SELECT count(*) FROM notices) AS notices,
+      (SELECT count(*) FROM feedback WHERE reply IS NULL OR reply='') AS pending`).get();
+    const subjects = await db.prepare('SELECT subject,count(*) AS total FROM shared_sources GROUP BY subject ORDER BY total DESC,subject').all();
+    return {totals, subjects};
+  }
   return async (authorization, data) => {
-    if (typeof owner !== 'string' || owner.length < 32 || typeof invite !== 'string' || invite.length < 24 || owner === invite) {
+    if (typeof owner !== 'string' || !/^[a-zA-Z0-9_-]{32,}$/.test(owner)) {
       fail(503, 'الربط عبر الإنترنت قيد الإعداد.');
     }
     const key = digest(authorization.match(/^Bearer ([a-zA-Z0-9_-]+)$/)?.[1] ?? '');
     const hashOwner = digest(owner);
-    const hashInvite = digest(invite);
-    if (timingSafeEqual(key, hashOwner)) {
+    const device = authorization.match(/^OwnerDevice ([a-zA-Z0-9_-]{43})$/)?.[1];
+    const approved = typeof ownerDeviceHash === 'string' && /^[a-zA-Z0-9_-]{43}$/.test(ownerDeviceHash)
+      ? Buffer.from(ownerDeviceHash, 'base64url') : null;
+    const trustedDevice = Boolean(device && approved && timingSafeEqual(digest(device), approved));
+    if (data.op === 'register-owner') {
+      const token = authorization.match(/^Invite ([a-zA-Z0-9_-]{43})$/)?.[1];
+      if (!token || typeof data.device !== 'string' || !devicePattern.test(data.device)) unauthorized();
+      const deviceId=hash(data.device), code=hash(token), now=Date.now();
+      await initialize();
+      await db.prepare('UPDATE OR IGNORE owner_invites SET device=? WHERE code=? AND device IS NULL AND expires>?').run(deviceId,code,now);
+      if((await db.prepare('SELECT device FROM owner_invites WHERE code=?').get(code))?.device!==deviceId) unauthorized();
+      return {};
+    }
+    if (device && !trustedDevice) await initialize();
+    if (trustedDevice || timingSafeEqual(key, hashOwner) || (device && await db.prepare('SELECT 1 FROM owner_invites WHERE device=?').get(hash(device)))) {
       await initialize();
       switch (data.op) {
         case 'status': return {};
+        case 'sources': case 'source': return sharedSources(data, true, 'owner');
+        case 'report': return ownerReport();
+        case 'addsource': return addSource(data,'owner','المالك');
+        case 'study': return studyList(data);
+        case 'addsubject': await db.prepare('INSERT OR IGNORE INTO class_subjects(name) VALUES(?)').run(field(data.name,80)); return {};
+        case 'addlesson': return addLesson(data);
+        case 'approvesource': {
+          const id = sourceId(data.id);
+          await db.prepare('INSERT OR IGNORE INTO approved_shared_sources(source) SELECT id FROM shared_sources WHERE id=?').run(id);
+          return {};
+        }
+        case 'removesource': {
+          const id = sourceId(data.id);
+          await db.prepare('DELETE FROM shared_sources WHERE id=?').run(id);
+          return {};
+        }
         case 'notices': return { notices: await notices() };
         case 'publish':
           await db.prepare('INSERT INTO notices(title,body,created) VALUES(?,?,?)').run(field(data.title, 180), field(data.body, 12000), Date.now());
           return {};
         case 'feedback': return { entries: await feedback() };
-        case 'reply':
-          if (!(await db.prepare('UPDATE feedback SET reply=? WHERE id=?').run(field(data.body, 2000), identifier(data.id))).changes) fail(404, 'الاقتراح غير موجود.');
+        case 'reply': {
+          const id=identifier(data.id), reply=field(data.body,2000);
+          if (!(await db.prepare('UPDATE feedback SET reply=? WHERE id=?').run(reply,id)).changes) fail(404,'الاقتراح غير موجود.');
+          return {id,reply};
+        }
+        case 'create-owner-invite': {
+          if (!timingSafeEqual(key,hashOwner)) fail(403,'أنشئ اعتماد المالك من لوحة الدعوات على الويب.');
+          const invite=randomBytes(32).toString('base64url'), now=Date.now(), expires=now+600000;
+          await db.prepare('DELETE FROM owner_invites WHERE device IS NULL').run();
+          await db.prepare('INSERT INTO owner_invites(code,expires) VALUES(?,?)').run(hash(invite),expires);
+          return {invite,expires};
+        }
+        case 'create-invite': {
+          const name = field(data.name, 100);
+          const email = normalizedEmail(data.email);
+          const token = randomBytes(32).toString('base64url');
+          const now = Date.now();
+          const expires = now + 86400000;
+          await db.prepare('DELETE FROM classroom_invites WHERE student IS NULL AND expires<=?').run(now);
+          if (await db.prepare('SELECT 1 FROM blocked_emails WHERE email=?').get(email)) fail(403, blockedMessage);
+          const result = await db.prepare(`INSERT OR IGNORE INTO classroom_invites(code,name,email,expires)
+            SELECT ?,?,?,? WHERE (SELECT count(*) FROM classroom_invites) < ? AND ${allowedStudent}`)
+            .run(hash(token), name, email, expires, maxStudents, email);
+          if (!result.changes) fail(409, 'لهذا البريد دعوة أو تسجيل حالي، أو بلغ الصف الحد الأقصى.');
+          return { invite: token, expires };
+        }
+        case 'revoke-invite': {
+          const email = normalizedEmail(data.email);
+          if (!(await db.prepare('DELETE FROM classroom_invites WHERE email=? AND student IS NULL').run(email)).changes)
+            fail(404, 'لا توجد دعوة معلّقة لهذا البريد.');
           return {};
+        }
+        case 'reset-registration': {
+          const email = normalizedEmail(data.email);
+          if (!(await db.prepare('DELETE FROM classroom_invites WHERE email=? AND student IS NOT NULL').run(email)).changes)
+            fail(404, 'لا يوجد جهاز مرتبط بهذا البريد.');
+          return {};
+        }
         case 'registrations': {
-          const entries = await db.prepare('SELECT name,created FROM students ORDER BY created DESC LIMIT 200').all();
+          const entries = await db.prepare(`
+            SELECT s.name,s.created,e.email,b.email IS NOT NULL AS blocked,i.student IS NOT NULL AS enrolled
+            FROM students s LEFT JOIN student_emails e ON e.student=s.id
+            LEFT JOIN blocked_emails b ON b.email=e.email LEFT JOIN classroom_invites i ON i.student=s.id ORDER BY s.created DESC LIMIT 200`).all();
           return { entries, total: (await db.prepare('SELECT count(*) AS total FROM students').get()).total };
+        }
+        case 'blockemail': case 'unblockemail': {
+          const email = normalizedEmail(data.email);
+          if (data.op === 'blockemail') await db.prepare('INSERT OR IGNORE INTO blocked_emails(email) VALUES(?)').run(email);
+          else await db.prepare('DELETE FROM blocked_emails WHERE email=?').run(email);
+          return {};
         }
         default: fail(400, 'العملية غير متاحة.');
       }
     }
-    const deviceToken = authorization.match(/^Device ([a-zA-Z0-9_-]{43})$/)?.[1];
-    if (!timingSafeEqual(key, hashInvite) && (!deviceToken || deviceToken !== data.device)) {
-      fail(401, 'تعذّر التحقق من اتصال الطالب.');
+    if (data.op === 'register') {
+      const token = authorization.match(/^Invite ([a-zA-Z0-9_-]{43})$/)?.[1];
+      if (!token || typeof data.device !== 'string' || !devicePattern.test(data.device)) unauthorized();
+      const email = normalizedEmail(data.email);
+      const student = hash(data.device);
+      const code = hash(token);
+      const now = Date.now();
+      await initialize();
+      const invite = await db.prepare('SELECT email FROM classroom_invites WHERE code=?').get(code);
+      if (invite?.email !== email) unauthorized();
+      if (await db.prepare('SELECT 1 FROM blocked_emails WHERE email=?').get(email)) fail(403, blockedMessage);
+      await db.prepare(`UPDATE OR IGNORE classroom_invites SET student=?,claimed=?
+        WHERE code=? AND student IS NULL AND expires>? AND ${allowedStudent}
+        AND NOT EXISTS (SELECT 1 FROM student_emails WHERE student=? AND email<>?)`)
+        .run(student, now, code, now, email, student, email);
+      const claimed = await db.prepare('SELECT student FROM classroom_invites WHERE code=?').get(code);
+      if (claimed?.student !== student) unauthorized();
+      return { email };
     }
-    if (!['sync','suggest'].includes(data.op)) fail(400, 'العملية غير متاحة.');
-    const student = digest(identifier(data.device)).toString('hex');
-    if (data.op === 'suggest') await limitSuggestion(student);
+    const deviceToken = authorization.match(/^Device ([a-zA-Z0-9_-]{43})$/)?.[1];
+    if (!deviceToken || (data.device !== undefined && deviceToken !== data.device)) unauthorized();
+    if (!['sync','suggest','sources','source','addsource','removesource','study','solve','subjects'].includes(data.op)) fail(400, 'العملية غير متاحة.');
+    const student = hash(deviceToken);
     await initialize();
-    await db.prepare('INSERT OR IGNORE INTO students VALUES(?,?,?)').run(student, field(data.name, 100), Date.now());
+    const registration = await db.prepare(`
+      SELECT i.name,i.email,b.email IS NOT NULL AS blocked FROM classroom_invites i
+      LEFT JOIN blocked_emails b ON b.email=i.email WHERE i.student=?`).get(student);
+    if (!registration) unauthorized();
+    if (registration.blocked) fail(403, blockedMessage);
+    if (['suggest','addsource'].includes(data.op)) await limitSuggestion(student);
     switch (data.op) {
+      case 'sources': case 'source': return sharedSources(data, false, student);
+      case 'study': return studyList(data);
+      case 'solve': return solveLesson(data);
+      case 'subjects': return {subjects:await db.prepare('SELECT name FROM class_subjects ORDER BY name LIMIT 100').all()};
+      case 'removesource':
+        if(!(await db.prepare('DELETE FROM shared_sources WHERE id=? AND publisher=?').run(sourceId(data.id),student)).changes)
+          fail(403,'يمكنك حذف المصادر التي نشرتها فقط.');
+        return {};
+      case 'addsource': return addSource(data,student,registration.name,registration.email);
       case 'sync': return { notices: await notices(), entries: await feedback(student) };
       case 'suggest': {
         const id = digest(student + ':' + identifier(data.requestId)).toString('hex');
-        await db.prepare('INSERT OR IGNORE INTO feedback(id,student,body,created) VALUES(?,?,?,?)').run(id, student, field(data.body, 2000), Date.now());
+        const saved = await db.prepare(`INSERT OR IGNORE INTO feedback(id,student,body,created) SELECT ?,?,?,? WHERE ${allowedStudent}`)
+          .run(id, student, field(data.body, 2000), Date.now(), registration.email);
+        if (!saved.changes && await db.prepare('SELECT 1 FROM blocked_emails WHERE email=?').get(registration.email)) fail(403, blockedMessage);
         return { entries: await feedback(student) };
       }
       default: fail(400, 'العملية غير متاحة.');

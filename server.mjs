@@ -1,16 +1,22 @@
 import { createServer } from 'node:http';
-import { randomBytes, scrypt, scryptSync, timingSafeEqual, createHash, createHmac } from 'node:crypto';
+import { isIP } from 'node:net';
+import { randomBytes, randomInt, scrypt, scryptSync, timingSafeEqual, createHash, createHmac } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { localOcr, duplicateTopic, topicKey } from './lib/ocr.mjs';
 
+import { clientIp } from './lib/client-ip.mjs';
+
 const env = process.env;
+const trustedProxy = env.SCHOOL_TRUSTED_PROXY || '';
+if (trustedProxy && !isIP(trustedProxy)) throw Error('SCHOOL_TRUSTED_PROXY must be a single IP address');
 const path = env.SCHOOL_DB || 'data/school.sqlite';
 mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 const db = new DatabaseSync(path);
 db.exec(`
+PRAGMA foreign_keys=ON;
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS subject_images(id INTEGER PRIMARY KEY, subject INTEGER NOT NULL, day TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL, mime TEXT, content BLOB, UNIQUE(subject, day, number));
 CREATE TABLE IF NOT EXISTS subject_progress(subject INTEGER PRIMARY KEY, page INTEGER NOT NULL);
@@ -47,11 +53,29 @@ if (!all('PRAGMA table_info(documents)').some(column => column.name === 'created
 }
 const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Damascus', dateStyle: 'short' });
 const schoolDay = timestamp => dayFormat.format(timestamp);
-function archive(subjectId) {
+if (!all('PRAGMA table_info(submissions)').some(column => column.name === 'day')) {
+  transaction(() => {
+    db.exec(`
+      ALTER TABLE submissions ADD COLUMN day TEXT;
+      ALTER TABLE submissions ADD COLUMN title TEXT;
+      ALTER TABLE submissions ADD COLUMN body TEXT;
+      ALTER TABLE subject_images ADD COLUMN owner_only INTEGER NOT NULL DEFAULT 0;
+    `);
+    const known = new Set(all("SELECT DISTINCT digest FROM submissions WHERE state='published'").map(item => item.digest));
+    if (known.size) {
+      for (const image of db.prepare('SELECT id,content FROM subject_images WHERE content IS NOT NULL').iterate()) {
+        if (known.has(hashImage(image.content))) run('UPDATE subject_images SET owner_only=1 WHERE id=?', image.id);
+      }
+    }
+  });
+}
+db.exec('CREATE INDEX IF NOT EXISTS submissions_day ON submissions(user,day)');
+function hashImage(bytes) { return createHash('sha256').update(bytes).digest('hex'); }
+function archive(subjectId, includePrivate) {
   const documents = all('SELECT id,title,created FROM documents WHERE subject=? ORDER BY id', subjectId);
   return {
     documents: documents.map(item => ({ id: item.id, title: item.title, day: schoolDay(item.created) })),
-    images: all('SELECT id,day,number,title FROM subject_images WHERE subject=? AND content IS NOT NULL ORDER BY day DESC,number ASC', subjectId),
+    images: all('SELECT id,day,number,title FROM subject_images WHERE subject=? AND content IS NOT NULL AND (owner_only=0 OR ?) ORDER BY day DESC,number ASC', subjectId, Number(includePrivate)),
     page: get('SELECT page FROM subject_progress WHERE subject=?', subjectId)?.page ?? null,
   };
 }
@@ -131,8 +155,9 @@ const time = value => {
   if (!Number.isFinite(parsed)) fail(400, 'موعد الظهور غير صحيح.');
   return parsed;
 };
-const cookieName = area => 'school_' + area;
-const cookie = (area, token, age) => cookieName(area) + '=' + token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=' + age + (env.SCHOOL_SECURE === '1' || (area === 'student' && env.STUDENT_ORIGIN?.startsWith('https://')) ? '; Secure' : '');
+const secureArea = area => env.SCHOOL_SECURE === '1' || env[area.toUpperCase() + '_ORIGIN']?.startsWith('https://');
+const cookieName = area => (secureArea(area) ? '__Host-' : '') + 'school_' + area;
+const cookie = (area, token, age) => cookieName(area) + '=' + token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=' + age + (secureArea(area) ? '; Secure' : '');
 const tokenFrom = (req, area) => (req.headers.cookie || '').match(new RegExp('(?:^|; )' + cookieName(area) + '=([a-f0-9]{64})(?:;|$)'))?.[1];
 function authenticate(req, area) {
   const token = tokenFrom(req, area);
@@ -197,7 +222,7 @@ async function analyzeImage(image, topics) {
   return JSON.parse((await result.json()).choices[0].message.content);
 }
 let imageQueue = Promise.resolve();
-async function processImage(id, subjectId, image, uploadedAt) {
+async function processImage(id, subjectId, image) {
   try {
     const topics = all('SELECT id,title FROM documents WHERE subject=?', subjectId);
     const result = await analyzeImage(image, topics);
@@ -212,13 +237,8 @@ async function processImage(id, subjectId, image, uploadedAt) {
     transaction(() => {
       const duplicate = duplicateTopic(title, body, topics) || topics.find(topic => topic.id === result.duplicateId)
         || get('SELECT id FROM documents WHERE subject=? AND topic=?', subjectId, key);
-      const document = duplicate?.id ?? Number(run('INSERT INTO documents(subject,title,body,topic,updated,created) VALUES(?,?,?,?,?,?)', subjectId, title, body, key, Date.now(), uploadedAt).lastInsertRowid);
-      run('UPDATE submissions SET state=?,document=? WHERE id=?', duplicate ? 'duplicate' : 'published', document, id);
-      if (!duplicate) {
-        const author = get('SELECT user AS id FROM submissions WHERE id=?', id);
-        audit(author, 'نشر مستند تلقائيًا', title);
-        insertImage(subjectId, image, title, schoolDay(uploadedAt));
-      }
+      if (duplicate) run("UPDATE submissions SET state='duplicate',document=? WHERE id=?", duplicate.id, id);
+      else run("UPDATE submissions SET state='review',title=?,body=? WHERE id=?", title, body, id);
     });
   } catch (error) {
     console.warn('Image processing failed:', error.message);
@@ -234,23 +254,30 @@ function quizQuestions(input) {
     return { text: field(question.text, 600), options, correct: question.correct };
   });
 }
-function createUser(input, role) {
+// EFF long wordlist. See lib/student-passphrase-license.txt.
+const studentWords = readFileSync(new URL('./lib/student-passphrase-words.txt', import.meta.url), 'utf8').trimEnd().split('\n');
+function temporaryPassword(role) {
+  if (role !== 'student') return randomBytes(12).toString('base64url');
+  return Array.from({ length: 4 }, () => studentWords[randomInt(studentWords.length)]).join(' ');
+}
+async function prepareUser(input, role) {
   const name = field(input.name).replace(/\s+/gu, ' ');
   const login = username(input.username);
-  const secret = input.password ? checkPassword(input.password) : randomBytes(12).toString('base64url');
+  const secret = input.password ? checkPassword(input.password) : temporaryPassword(role);
   const grants = role === 'assistant' && Array.isArray(input.permissions) ? permissions.filter(p => input.permissions.includes(p)) : [];
-  if (get('SELECT id FROM users WHERE username=?', login)) fail(409, 'اسم المستخدم مستخدم بالفعل.');
-  run('INSERT INTO users(name,username,password,role,permissions) VALUES(?,?,?,?,?)', name, login, passwordHash(secret), role, JSON.stringify(grants));
-  return { name, username: login, password: secret };
+  const salt = randomBytes(16).toString('hex');
+  const password = salt + ':' + (await derive(secret, salt, 64)).toString('hex');
+  return { credentials: { name, username: login, password: secret }, password, role, grants };
 }
 async function api(req, res, area, route, params) {
   const method = req.method;
   if (method === 'POST' && route === '/login') {
+    const ip = clientIp(req, trustedProxy);
+    limit('ip:' + area + ':' + ip, 120, 600000);
     const login = await json(req, 4096);
-    limit('ip:' + area + ':' + req.socket.remoteAddress, 120, 600000);
     const byName = area === 'student' && login.name !== undefined;
     const name = byName ? field(login.name).replace(/\s+/gu, ' ') : username(login.username);
-    limit('login:' + area + ':' + name.toLowerCase(), 10, 600000);
+    limit('login:' + area + ':' + ip + ':' + name.toLowerCase(), 10, 600000);
     const password = checkPassword(login.password);
     const candidates = byName
       ? all("SELECT * FROM users WHERE role='student' AND active=1 AND name=? COLLATE NOCASE LIMIT 9", name)
@@ -290,7 +317,7 @@ async function api(req, res, area, route, params) {
   if (method === 'GET' && route === '/subjects') return all('SELECT * FROM subjects');
   if (method === 'GET' && route === '/archive') {
     if (area === 'admin') ownerOnly(user);
-    return archive(subject(params.get('subject')).id);
+    return archive(subject(params.get('subject')).id, area === 'admin');
   }
   if (method === 'POST' && route === '/archive-image' && area === 'admin') {
     ownerOnly(user);
@@ -323,22 +350,23 @@ async function api(req, res, area, route, params) {
       const data = await json(req, 6_700_000);
       if (get("SELECT count(*) AS total FROM submissions WHERE state='processing'").total >= 12) fail(429, 'المعالجة مشغولة. جرّب بعد قليل.');
       const id = subject(data.subject).id;
-      const digest = hash(imageData(data.image));
-      const earlier = get("SELECT document FROM submissions WHERE subject=? AND digest=? AND state IN ('published','duplicate') ORDER BY id LIMIT 1", id, digest);
-      const submission = Number(run('INSERT INTO submissions(user,subject,digest,state,document) VALUES(?,?,?,?,?)',
-        user.id, id, digest, earlier ? 'duplicate' : 'processing', earlier?.document ?? null).lastInsertRowid);
-      const uploadedAt = Date.now();
+      const digest = hashImage(imageData(data.image));
+      const day = schoolDay(Date.now());
+      if (get('SELECT count(*) AS total FROM submissions WHERE user=? AND day=?', user.id, day).total >= 5) fail(429, 'بلغت الحد اليومي للمساهمات.');
+      const earlier = get("SELECT document FROM submissions WHERE subject=? AND digest=? AND document IS NOT NULL AND state IN ('published','duplicate') ORDER BY id LIMIT 1", id, digest);
+      const submission = Number(run('INSERT INTO submissions(user,subject,digest,state,document,day) VALUES(?,?,?,?,?,?)',
+        user.id, id, digest, earlier ? 'duplicate' : 'processing', earlier?.document ?? null, day).lastInsertRowid);
       if (!earlier) imageQueue = imageQueue.then(() => {
-        const saved = get("SELECT document FROM submissions WHERE subject=? AND digest=? AND state IN ('published','duplicate') ORDER BY id LIMIT 1", id, digest);
+        const saved = get("SELECT document FROM submissions WHERE subject=? AND digest=? AND document IS NOT NULL AND state IN ('published','duplicate') ORDER BY id LIMIT 1", id, digest);
         if (saved) run("UPDATE submissions SET state='duplicate',document=? WHERE id=?", saved.document, submission);
-        else return processImage(submission, id, data.image, uploadedAt);
+        else return processImage(submission, id, data.image);
       }).catch(error => console.error(error));
       return { id: submission, state: earlier ? 'duplicate' : 'processing', document: earlier?.document };
     }
     if (method === 'GET' && route === '/quizzes') return all('SELECT id,title FROM quizzes WHERE subject=? AND published=1', subject(params.get('subject')).id);
     if (method === 'GET' && route === '/quiz') {
       const quiz = get('SELECT * FROM quizzes WHERE id=? AND published=1', Number(params.get('id'))) ?? fail(404, 'الاختبار غير متاح.');
-      return { ...quiz, questions: JSON.parse(quiz.questions).map(({ text, options }) => ({ text, options })) };
+      return { id: quiz.id, title: quiz.title, attempted: Boolean(get('SELECT id FROM attempts WHERE user=? AND quiz=? LIMIT 1', user.id, quiz.id)), questions: JSON.parse(quiz.questions).map(({ text, options }) => ({ text, options })) };
     }
     if (method === 'POST' && route === '/quiz') {
       const data = await json(req);
@@ -346,6 +374,7 @@ async function api(req, res, area, route, params) {
       const questions = JSON.parse(quiz.questions);
       if (!Array.isArray(data.answers) || data.answers.length !== questions.length ||
           data.answers.some((answer, i) => !Number.isInteger(answer) || answer < 0 || answer >= questions[i].options.length)) fail(400, 'أجب عن كل الأسئلة.');
+      if (get('SELECT id FROM attempts WHERE user=? AND quiz=? LIMIT 1', user.id, quiz.id)) fail(409, 'سبق أن سلّمت هذا الاختبار.');
       const correct = questions.map(question => question.correct);
       const score = correct.filter((answer, index) => answer === data.answers[index]).length;
       run('INSERT INTO attempts(user,quiz,score,total,created) VALUES(?,?,?,?,?)', user.id, quiz.id, score, correct.length, Date.now());
@@ -385,6 +414,11 @@ async function api(req, res, area, route, params) {
     return all("SELECT id,name,username,role,permissions,temporary,active FROM users WHERE role<>'owner' ORDER BY id DESC")
       .map(account => ({ ...account, permissions: JSON.parse(account.permissions) }));
   }
+  if (method === 'GET' && route === '/submission-review') {
+    ownerOnly(user);
+    return all(`SELECT s.id,s.title,s.body,b.name AS subjectName,u.name AS studentName FROM submissions s
+      JOIN subjects b ON b.id=s.subject JOIN users u ON u.id=s.user WHERE s.state='review' ORDER BY s.id LIMIT 100`);
+  }
   if (method === 'GET' && route === '/audit') {
     ownerOnly(user);
     return all('SELECT a.*,u.name AS actor FROM audit a JOIN users u ON a.user=u.id ORDER BY a.id DESC LIMIT 200');
@@ -395,6 +429,26 @@ async function api(req, res, area, route, params) {
   }
   if (method !== 'POST') fail(404, 'الصفحة غير موجودة.');
   const data = await json(req);
+  if (route === '/accounts') {
+    ownerOnly(user);
+    const batch = data.accounts || [data];
+    if (!Array.isArray(batch) || !batch.length || batch.length > 60) fail(400, 'أدخل من حساب واحد إلى 60 حسابًا.');
+    limit('create-accounts:' + user.id, 5, 600000);
+    const accounts = [];
+    for (const account of batch) {
+      const role = batch.length === 1 && account?.role === 'assistant' ? 'assistant' : 'student';
+      accounts.push(await prepareUser(account || {}, role));
+    }
+    ownerOnly(authenticate(req, area));
+    return transaction(() => {
+      for (const { credentials, password, role, grants } of accounts) {
+        if (!run('INSERT INTO users(name,username,password,role,permissions) VALUES(?,?,?,?,?) ON CONFLICT(username) DO NOTHING',
+          credentials.name, credentials.username, password, role, JSON.stringify(grants)).changes) fail(409, 'اسم المستخدم مستخدم بالفعل.');
+      }
+      audit(user, 'إنشاء حسابات', accounts.length);
+      return accounts.map(account => account.credentials);
+    });
+  }
   return transaction(() => {
     switch (route) {
       case '/reply-suggestion': {
@@ -405,19 +459,11 @@ async function api(req, res, area, route, params) {
         audit(user, 'رد على اقتراح', id);
         return {};
       }
-      case '/accounts': {
-        ownerOnly(user);
-        const batch = data.accounts || [data];
-        if (!Array.isArray(batch) || !batch.length || batch.length > 60) fail(400, 'أدخل من حساب واحد إلى 60 حسابًا.');
-        const accounts = batch.map(account => createUser(account || {}, batch.length === 1 && account?.role === 'assistant' ? 'assistant' : 'student'));
-        audit(user, 'إنشاء حسابات', accounts.length);
-        return accounts;
-      }
       case '/account': {
         ownerOnly(user);
         const target = get("SELECT * FROM users WHERE id=? AND role<>'owner'", Number(data.id)) ?? fail(404, 'الحساب غير موجود.');
         if (data.action === 'reset') {
-          const password = randomBytes(12).toString('base64url');
+          const password = temporaryPassword(target.role);
           run('UPDATE users SET password=?,temporary=1 WHERE id=?', passwordHash(password), target.id);
           run('DELETE FROM sessions WHERE user=?', target.id);
           audit(user, 'إعادة كلمة المرور', target.username);
@@ -454,6 +500,36 @@ async function api(req, res, area, route, params) {
         if (!Number.isInteger(data.page) || data.page < 1 || data.page > 10000) fail(400, 'أدخل رقم صفحة صحيحًا بين 1 و10000.');
         run('INSERT INTO subject_progress(subject,page) VALUES(?,?) ON CONFLICT(subject) DO UPDATE SET page=excluded.page', subjectId, data.page);
         audit(user, 'تحديث صفحة المادة', subjectId + ': ' + data.page);
+        return {};
+      }
+      case '/submission-review': {
+        ownerOnly(user);
+        const submission = get("SELECT * FROM submissions WHERE id=? AND state='review'", Number(data.id))
+          ?? fail(404, 'المساهمة غير متاحة للمراجعة.');
+        if (!['approve', 'reject'].includes(data.action)) fail(400, 'اختر إجراء المراجعة.');
+        if (data.action === 'reject') {
+          run("UPDATE submissions SET state='rejected',title=NULL,body=NULL WHERE id=?", submission.id);
+        } else {
+          const title = field(data.title);
+          const body = field(data.body, 16000);
+          const topic = topicKey(title);
+          if (!topic) fail(400, 'أدخل عنوانًا يتضمن اسم الموضوع.');
+          const existing = get('SELECT id FROM documents WHERE subject=? AND topic=?', submission.subject, topic);
+          const now = Date.now();
+          const document = existing?.id ?? Number(run('INSERT INTO documents(subject,title,body,topic,updated,created) VALUES(?,?,?,?,?,?)',
+            submission.subject, title, body, topic, now, now).lastInsertRowid);
+          run('UPDATE submissions SET state=?,document=?,title=NULL,body=NULL WHERE id=?',
+            existing ? 'duplicate' : 'published', document, submission.id);
+        }
+        audit(user, data.action === 'approve' ? 'اعتماد مساهمة' : 'رفض مساهمة', submission.id);
+        return {};
+      }
+      case '/document-remove': {
+        ownerOnly(user);
+        const id = Number(data.id);
+        if (!run('DELETE FROM documents WHERE id=?', id).changes) fail(404, 'المستند غير موجود.');
+        run("UPDATE submissions SET state='withdrawn',document=NULL WHERE document=?", id);
+        audit(user, 'حذف مستند', id);
         return {};
       }
       case '/documents': {
@@ -513,6 +589,7 @@ async function api(req, res, area, route, params) {
 const staticFiles = {
   '/icon-192.png': ['icon-192.png', 'image/png'],
   '/icon-512.png': ['icon-512.png', 'image/png'],
+  '/icon-maskable.svg': ['icon-maskable.svg', 'image/svg+xml'],
   '/fonts/cairo-arabic.woff2': ['fonts/cairo-arabic-wght-normal.woff2', 'font/woff2'],
   '/fonts/cairo-latin.woff2': ['fonts/cairo-latin-wght-normal.woff2', 'font/woff2'],
   '/styles.css': ['styles.css', 'text/css'],
@@ -520,11 +597,13 @@ const staticFiles = {
 };
 function serve(area, port) {
   const origin = env[area.toUpperCase() + '_ORIGIN'];
+  const assets = new Map();
   if (env.SCHOOL_SECURE === '1' && !origin?.startsWith('https://')) throw Error('HTTPS origin required for ' + area);
   createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    if (secureArea(area)) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     res.setHeader('Content-Security-Policy', "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
     try {
@@ -533,7 +612,7 @@ function serve(area, port) {
         const user = authenticate(req, area);
         if (user.temporary) fail(403, 'غيّر كلمة المرور أولًا.');
         if (area === 'admin') ownerOnly(user);
-        const image = get('SELECT mime,content FROM subject_images WHERE id=? AND content IS NOT NULL', Number(url.searchParams.get('id')));
+        const image = get('SELECT mime,content FROM subject_images WHERE id=? AND content IS NOT NULL AND (owner_only=0 OR ?)', Number(url.searchParams.get('id')), Number(area === 'admin'));
         if (!image) fail(404, 'الصورة غير موجودة.');
         res.setHeader('Content-Type', image.mime);
         res.end(Buffer.from(image.content));
@@ -578,16 +657,28 @@ function serve(area, port) {
         ...(area === 'student' ? {
           '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'],
           '/sw.js': ['sw.js', 'text/javascript'],
+          '/offline.html': ['offline.html', 'text/html'],
         } : {}),
         '/': [area + '.html', 'text/html'],
         '/app.js': [area + '.js', 'text/javascript'],
       }[url.pathname];
       if (req.method !== 'GET' || !Array.isArray(entry)) fail(404, 'الصفحة غير موجودة.');
+      if (!assets.has(entry[0])) {
+        let content = readFileSync(new URL('./web/' + entry[0], import.meta.url));
+        if (entry[0] === 'styles.css' && env.SCHOOL_FONT_DIR) {
+          const fonts = '@font-face{font-family:Thmanyah;src:url("/fonts/thmanyahsans-Regular.woff2") format("woff2");font-weight:400 500;font-display:swap}@font-face{font-family:Thmanyah;src:url("/fonts/thmanyahsans-Bold.woff2") format("woff2");font-weight:600 900;font-display:swap}';
+          content = Buffer.concat([Buffer.from(fonts), content]);
+        }
+        assets.set(entry[0], { content, etag: '"' + hash(content) + '"' });
+      }
+      const { content, etag } = assets.get(entry[0]);
       res.setHeader('Content-Type', entry[1].startsWith('font/') || entry[1].startsWith('image/') ? entry[1] : entry[1] + '; charset=utf-8');
-      if (entry[1] === 'font/woff2') res.setHeader('Cache-Control', 'public, max-age=86400');
-      const content = readFileSync(new URL('./web/' + entry[0], import.meta.url));
-      if (entry[0] === 'styles.css' && env.SCHOOL_FONT_DIR) {
-        res.write('@font-face{font-family:Thmanyah;src:url("/fonts/thmanyahsans-Regular.woff2") format("woff2");font-weight:400 500;font-display:swap}@font-face{font-family:Thmanyah;src:url("/fonts/thmanyahsans-Bold.woff2") format("woff2");font-weight:600 900;font-display:swap}');
+      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+      res.setHeader('ETag', etag);
+      const tags = (req.headers['if-none-match'] || '').split(',').map(tag => tag.trim().replace(/^W\//, ''));
+      if (tags.includes('*') || tags.includes(etag)) {
+        res.writeHead(304).end();
+        return;
       }
       res.end(content);
     } catch (error) {

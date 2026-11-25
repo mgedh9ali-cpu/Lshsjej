@@ -6,7 +6,7 @@ workers_dev = true
 
 [[d1_databases]]
 binding = "DB"
-database_name = "qum-dorous"
+database_name = "suggestions-db"
 database_id = "123d5d0c-1fff-45c4-b834-352be7dbb307"
 
 [[ratelimits]]
@@ -18,3 +18,11 @@ simple = { limit = 300, period = 60 }
 name = "SUGGESTION_RATE"
 namespace_id = "71040517"
 simple = { limit = 8, period = 60 }
+
+[[ratelimits]]
+name = "SUGGESTION_IP_RATE"
+namespace_id = "71040518"
+simple = { limit = 60, period = 60 }
+
+[vars]
+QUM_MAX_STUDENTS = "200"

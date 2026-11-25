@@ -1,6 +1,16 @@
 {$STUDENT_ORIGIN} {
-  reverse_proxy school:{$STUDENT_PORT:3000}
+	reverse_proxy school:{$STUDENT_PORT:3000} {
+		header_up X-Forwarded-For {http.request.remote.host}
+	}
 }
 {$ADMIN_ORIGIN} {
-  reverse_proxy school:{$ADMIN_PORT:3001}
+	@allowed remote_ip {$ADMIN_ALLOWED_CIDRS:127.0.0.1/32 ::1/128}
+	handle @allowed {
+		reverse_proxy school:{$ADMIN_PORT:3001} {
+			header_up X-Forwarded-For {http.request.remote.host}
+		}
+	}
+	handle {
+		respond 403
+	}
 }

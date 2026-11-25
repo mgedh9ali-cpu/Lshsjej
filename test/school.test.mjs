@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +20,16 @@ test('separate interfaces, owner approvals, private results, notices and image d
   const tmp = await mkdtemp(join(tmpdir(), 'school-test-'));
   const password = 'temporary-password';
   const source = join(tmp, 'test.sqlite');
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/Z1sAAAAASUVORK5CYII=';
+  const legacyBytes = Buffer.from(png.split(',')[1], 'base64');
+  const legacy = new DatabaseSync(source);
+  legacy.exec(`
+    CREATE TABLE subject_images(id INTEGER PRIMARY KEY, subject INTEGER NOT NULL, day TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL, mime TEXT, content BLOB, UNIQUE(subject, day, number));
+    CREATE TABLE submissions(id INTEGER PRIMARY KEY,user INTEGER,subject INTEGER,digest TEXT,state TEXT,document INTEGER);
+  `);
+  legacy.prepare("INSERT INTO subject_images VALUES(200,1,'2026-11-01',1,'Legacy image','image/png',?)").run(legacyBytes);
+  legacy.prepare("INSERT INTO submissions VALUES(200,999,1,?,'published',NULL)").run(createHash('sha256').update(legacyBytes).digest('hex'));
+  legacy.close();
   let aiCalls = 0;
   const mock = createServer(async (req, res) => {
     let raw = '';
@@ -58,6 +69,8 @@ test('separate interfaces, owner approvals, private results, notices and image d
       const file = await fetch('http://127.0.0.1:' + port + asset);
       assert.equal(file.status, 200);
       assert.ok((await file.text()).length > 0);
+      const conditional = await fetch('http://127.0.0.1:' + port + asset, { headers: { 'If-None-Match': file.headers.get('ETag') } });
+      assert.equal(conditional.status, 304);
     }
   }
   assert.equal(await (await fetch('http://127.0.0.1:' + studentPort + '/student-app')).text(), 'school-student-v1');
@@ -102,6 +115,8 @@ test('separate interfaces, owner approvals, private results, notices and image d
   assert.equal((await admin('/publish-quiz', { id })).status, 200);
   assert.equal('correct' in (await student('/quiz?id=' + id)).body.questions[0], false);
   assert.equal((await student('/quiz', { id, answers: [0] })).body.score, 1);
+  assert.equal((await student('/quiz', { id, answers: [0] })).status, 409);
+  assert.equal((await student('/quiz?id=' + id)).body.attempted, true);
   assert.equal((await student('/results')).body.length, 1);
   const second = await request(studentPort, '/login', { username: 'student2', password });
   await student('/password', { password: 'another-student-key' }, second.cookie);
@@ -110,8 +125,11 @@ test('separate interfaces, owner approvals, private results, notices and image d
   await admin('/notices', { kind: 'reminder', title: 'لاحقًا', body: 'مراجعة', subject, publish: true, visible: new Date(Date.now() + 86400000).toISOString() });
   await admin('/notices', { kind: 'reminder', title: 'اليوم', body: 'اختبار', subject, publish: true });
   assert.deepEqual((await student('/notices')).body.map(item => item.title), ['اليوم']);
-  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/Z1sAAAAASUVORK5CYII=';
-  const first = await student('/submissions', { subject, image: png });
+  const imageUrl = 'http://127.0.0.1:' + studentPort + '/archive-image?id=';
+  assert.equal((await fetch(imageUrl + '200', { headers: { Cookie: learner.cookie } })).status, 404);
+  assert.equal((await fetch('http://127.0.0.1:' + adminPort + '/archive-image?id=200', { headers: { Cookie: owner.cookie } })).status, 200);
+  const contribution = 'data:image/png;base64,' + Buffer.concat([legacyBytes, Buffer.from([0])]).toString('base64');
+  const first = await student('/submissions', { subject, image: contribution });
   assert.equal(first.status, 200);
   async function completed(id) {
     for (let i = 0; i < 100; i++) {
@@ -121,9 +139,15 @@ test('separate interfaces, owner approvals, private results, notices and image d
     }
     throw Error('Image processing timeout');
   }
+  const pending = await completed(first.body.id);
+  assert.equal(pending.state, 'review');
+  assert.deepEqual((await student('/documents?subject=' + subject)).body, []);
+  assert.equal((await admin('/submission-review', undefined, assistant.cookie)).status, 403);
+  const [{ title, body }] = (await admin('/submission-review')).body;
+  assert.equal((await admin('/submission-review', { id: pending.id, action: 'approve', title, body })).status, 200);
   const published = await completed(first.body.id);
   assert.equal(published.state, 'published');
-  assert.equal((await student('/submissions', { subject, image: png })).body.state, 'duplicate');
+  assert.equal((await student('/submissions', { subject, image: contribution })).body.state, 'duplicate');
   const webp = 'data:image/webp;base64,UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA';
   const semantic = await student('/submissions', { subject, image: webp });
   assert.equal((await completed(semantic.body.id)).document, published.document);
@@ -131,8 +155,8 @@ test('separate interfaces, owner approvals, private results, notices and image d
   assert.equal((await student('/documents?subject=' + subject)).body.length, 1);
   const archiveUrl = '/archive?subject=' + subject;
   const initialArchive = (await student(archiveUrl)).body;
-  assert.equal(initialArchive.images.length, 1);
-  assert.equal(initialArchive.documents[0].day, initialArchive.images[0].day);
+  assert.equal(initialArchive.images.length, 0);
+  assert.equal(initialArchive.documents.length, 1);
   assert.equal((await student('/progress', { subject, page: 57 })).status, 404);
   assert.equal((await admin('/progress', { subject, page: 53 })).status, 200);
   assert.equal((await admin('/progress', { subject, page: 57 })).status, 200);
@@ -144,7 +168,6 @@ test('separate interfaces, owner approvals, private results, notices and image d
   const later = (await admin('/archive-image', photo)).body.id;
   const dated = (await student(archiveUrl)).body.images.filter(item => item.day === photo.day && item.id === later);
   assert.equal(dated[0].number, 2);
-  const imageUrl = 'http://127.0.0.1:' + studentPort + '/archive-image?id=';
   assert.equal((await fetch(imageUrl + later)).status, 401);
   assert.equal((await fetch(imageUrl + manual, { headers: { Cookie: learner.cookie } })).status, 404);
   const visibleImage = await fetch(imageUrl + later, { headers: { Cookie: learner.cookie } });
@@ -169,4 +192,22 @@ test('separate interfaces, owner approvals, private results, notices and image d
     assert.equal(restored.prepare('SELECT count(*) AS total FROM documents').get().total, 1);
     assert.equal(restored.prepare('SELECT count(*) AS total FROM attempts').get().total, 1);
   } finally { restored.close(); }
+  assert.equal((await student('/submissions', { subject, image: contribution })).status, 200);
+  assert.equal((await student('/submissions', { subject, image: contribution })).status, 200);
+  assert.equal((await student('/submissions', { subject, image: contribution })).status, 429);
+  assert.equal((await admin('/document-remove', { id: published.document })).status, 200);
+  assert.deepEqual((await student('/documents?subject=' + subject)).body, []);
+  assert.equal((await completed(first.body.id)).state, 'withdrawn');
+  const generated = await admin('/accounts', { name: 'طالب إضافي', username: 'generated' });
+  assert.equal(generated.status, 200);
+  assert.equal(generated.body[0].password.split(' ').length, 4);
+  assert.equal((await request(studentPort, '/login', generated.body[0])).status, 200);
+  const newOwnerPassword = 'new-owner-password';
+  const rotation = spawnSync(process.execPath, ['scripts/reset-owner-password.mjs'], {
+    input: newOwnerPassword + '\n', env: { ...process.env, SCHOOL_DB: source },
+  });
+  assert.equal(rotation.status, 0, rotation.stderr.toString());
+  assert.equal((await admin('/me')).status, 401);
+  assert.equal((await request(adminPort, '/login', { username: 'owner', password })).status, 401);
+  assert.equal((await request(adminPort, '/login', { username: 'owner', password: newOwnerPassword })).status, 200);
 });

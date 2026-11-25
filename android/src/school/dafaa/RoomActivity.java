@@ -20,6 +20,7 @@ public final class RoomActivity extends Activity {
     private volatile boolean sharing;
     private ValueCallback<Uri[]> picker;
     private String token="";
+    private RoomSession session;
     private String remote;
     private String backupPassword;
     private String restorePassword;
@@ -29,7 +30,8 @@ public final class RoomActivity extends Activity {
         owner="school.dafaa.owner".equals(getPackageName());
         base=owner?"https://room.invalid/":"https://classroom.invalid/";
         if(owner){store=new RoomStore(this);link=new RoomLink(store);}
-        token=getPreferences(MODE_PRIVATE).getString(owner?"ownerToken":"studentToken","");
+        session=new RoomSession(getPreferences(MODE_PRIVATE),owner?"ownerToken":"studentToken");
+        token=session.load();
         unlocked=getSharedPreferences("offline_student",MODE_PRIVATE).getBoolean("remembered",false);
         remote=getPreferences(MODE_PRIVATE).getString("invite","");
         web=new WebView(this);web.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
@@ -70,6 +72,11 @@ public final class RoomActivity extends Activity {
             }
         });
     }
+    private void clearSession(){
+        token="";
+        session.clear();
+        getPreferences(MODE_PRIVATE).edit().remove(owner?"ownerName":"studentName").apply();
+    }
     public final class Bridge{
         @JavascriptInterface public void request(int id,String raw){
             tasks.execute(()->{
@@ -98,7 +105,7 @@ public final class RoomActivity extends Activity {
                         boolean sameClass=previous.length==3&&current.length==3&&previous[2].equals(current[2]);
                         remote=code;
                         android.content.SharedPreferences.Editor editor=getPreferences(MODE_PRIVATE).edit().putString("invite",code);
-                        if(!sameClass){token="";editor.remove("studentToken").remove("studentName");}
+                        if(!sameClass)clearSession();
                         editor.apply();
                         value=RoomStore.obj("retained",sameClass&&!token.isEmpty());
                     }else if(owner&&op.equals("backup")){
@@ -134,22 +141,21 @@ public final class RoomActivity extends Activity {
                     else{
                         p.put("token",token);
                         if(owner)value=store.handle(true,"device",p);
-                        else{JSONObject response=RoomLink.call(remote,p);if(response.has("error")){String error=response.getString("error");if(error.contains("انتهت الجلسة")){token="";getPreferences(MODE_PRIVATE).edit().remove("studentToken").remove("studentName").apply();}throw new Exception(error);}value=response.get("value");}
+                        else{JSONObject response=RoomLink.call(remote,p);if(response.has("error")){String error=response.getString("error");throw new Exception(error);}value=response.get("value");}
                         if(op.equals("login")||op.equals("setup")){
-                            token=((JSONObject)value).getString("token");
-                            getPreferences(MODE_PRIVATE).edit().putString(owner?"ownerToken":"studentToken",token).putString(owner?"ownerName":"studentName",((JSONObject)value).getString("name")).apply();((JSONObject)value).remove("token");
+                            String fresh=((JSONObject)value).getString("token");
+                            try{session.save(fresh);}catch(Exception failure){session.clear();}
+                            token=fresh;
+                            getPreferences(MODE_PRIVATE).edit().putString(owner?"ownerName":"studentName",((JSONObject)value).getString("name")).apply();
+                            ((JSONObject)value).remove("token");
                         }else if(op.equals("logout")){
-                            token="";
-                            getPreferences(MODE_PRIVATE).edit().remove(owner?"ownerToken":"studentToken").remove(owner?"ownerName":"studentName").apply();
+                            clearSession();
                             if(owner&&sharing){link.close();link=new RoomLink(store);sharing=false;runOnUiThread(()->getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));}
                         }
                     }
                     result=RoomStore.obj("value",value);
                 }catch(Exception e){
-                    if(e.getMessage()!=null&&e.getMessage().contains("انتهت الجلسة")){
-                        token="";
-                        getPreferences(MODE_PRIVATE).edit().remove(owner?"ownerToken":"studentToken").remove(owner?"ownerName":"studentName").apply();
-                    }
+                    if(e.getMessage()!=null&&e.getMessage().contains("انتهت الجلسة"))clearSession();
                     try{result=RoomStore.obj("error",RoomLink.safe(e));}catch(Exception impossible){return;}
                 }
                 final String js="window.complete("+id+","+JSONObject.quote(result.toString())+")";

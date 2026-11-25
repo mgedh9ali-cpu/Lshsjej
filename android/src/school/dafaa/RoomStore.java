@@ -19,6 +19,7 @@ final class RoomStore {
     private final SQLiteDatabase db;
     private final Context context;
     private final Map<String,long[]> attempts = new HashMap<>();
+    private static final long DAY=24*60*60*1000L;
     private static final SecureRandom RNG = new SecureRandom();
     RoomStore(Context c){
         context=c.getApplicationContext();
@@ -34,6 +35,11 @@ final class RoomStore {
         db.execSQL("CREATE TABLE IF NOT EXISTS quizzes(id INTEGER PRIMARY KEY,subject INTEGER,title TEXT,question TEXT,choices TEXT,answer INTEGER,published INTEGER DEFAULT 0)");
         db.execSQL("CREATE TABLE IF NOT EXISTS results(id INTEGER PRIMARY KEY,quiz INTEGER,name TEXT,choice INTEGER,correct INTEGER,created INTEGER)");
         // Keep existing classroom databases intact while enabling activity and source attribution.
+        db.execSQL("CREATE TABLE IF NOT EXISTS source_queue(id INTEGER PRIMARY KEY,subject INTEGER,title TEXT,topic TEXT,body TEXT,created INTEGER,student TEXT)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS source_queue_student ON source_queue(student,created)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS source_uploads(student TEXT, day TEXT, count INTEGER, PRIMARY KEY(student,day))");
+        db.execSQL("CREATE INDEX IF NOT EXISTS results_account_quiz ON results(name,quiz)");
+        if(!hasColumn("accounts","active"))db.execSQL("ALTER TABLE accounts ADD COLUMN active INTEGER NOT NULL DEFAULT 1");
         if(!hasColumn("accounts","last_seen"))db.execSQL("ALTER TABLE accounts ADD COLUMN last_seen INTEGER");
         if(!hasColumn("sources","added_by"))db.execSQL("ALTER TABLE sources ADD COLUMN added_by TEXT");
         for(String subject:new String[]{"الفيزياء","الكيمياء","العلوم","الإنجليزي","الرياضيات"})
@@ -157,7 +163,7 @@ final class RoomStore {
     }
     private void account(JSONObject p,boolean owner)throws Exception{
         String name=check(p,"name",80),pass=check(p,"password",128);
-        if(pass.length()<8)throw new Exception("كلمة السر تحتاج ثمانية أحرف على الأقل.");
+        if(pass.length()<12)throw new Exception("كلمة السر تحتاج إلى 12 حرفًا على الأقل.");
         if(rows("SELECT name FROM accounts WHERE name=?",name).length()>0)throw new Exception("الاسم مستخدم بالفعل.");
         String salt=random(18);
         db.execSQL("INSERT INTO accounts(name,salt,verifier,owner) VALUES(?,?,?,?)",new Object[]{name,salt,Base64.encodeToString(hash(pass,salt),Base64.NO_WRAP),owner?1:0});
@@ -167,33 +173,54 @@ final class RoomStore {
         if(a==null||a[0]<=now){a=new long[]{now+period,0};attempts.put(key,a);}
         if(++a[1]>max)throw new Exception("محاولات كثيرة. انتظر قليلًا.");
     }
-    synchronized Object handle(boolean owner,String peer,JSONObject p)throws Exception{
-        String op=check(p,"op",40);
-        boolean first=rows("SELECT 1 FROM accounts WHERE owner=1").length()==0;
-        if(op.equals("status"))return obj("setup",owner&&first);
-        if(op.equals("setup")){
-            if(!owner||!first)throw new Exception("العملية للمالك.");
-            account(p,true);op="login";
-        }
-        if(op.equals("login")){
+    Object handle(boolean owner,String peer,JSONObject p)throws Exception{
+        if("login".equals(check(p,"op",40)))return login(owner,peer,p);
+        synchronized(this){return handleLocked(owner,p);}
+    }
+    private Object login(boolean owner,String peer,JSONObject p)throws Exception{
+        String name=check(p,"name",80),pass=check(p,"password",128),role=owner?"1":"0";
+        String query="SELECT salt,verifier FROM accounts WHERE name=? AND owner=? AND active=1";
+        JSONObject account;
+        synchronized(this){
             rate("login:"+peer,60,60000);
-            String name=check(p,"name",80),pass=check(p,"password",128);
-            JSONArray found=rows("SELECT salt,verifier FROM accounts WHERE name=? AND owner=?",name,owner?"1":"0");
-            JSONObject a=found.optJSONObject(0);
-            byte[] actual=hash(pass,a==null?"unavailable-account":a.getString("salt"));
-            if(a==null||!MessageDigest.isEqual(actual,Base64.decode(a.getString("verifier"),Base64.DEFAULT)))throw new Exception("الاسم أو كلمة السر غير صحيحة.");
-            String token=random(32);
-            long now=System.currentTimeMillis();
-            db.execSQL("INSERT INTO sessions(token_hash,name,owner,created) VALUES(?,?,?,?)",
-                new Object[]{tokenHash(token),name,owner?1:0,now});
-            db.execSQL("UPDATE accounts SET last_seen=? WHERE name=?",new Object[]{now,name});
-            return obj("token",token,"name",name);
+            rate("login:"+peer+":"+name,10,60000);
+            account=rows(query,name,role).optJSONObject(0);
+        }
+        byte[] actual=hash(pass,account==null?"unavailable-account":account.getString("salt"));
+        if(account==null||!MessageDigest.isEqual(actual,Base64.decode(account.getString("verifier"),Base64.DEFAULT)))
+            throw new Exception("الاسم أو كلمة السر غير صحيحة.");
+        synchronized(this){
+            JSONObject current=rows(query,name,role).optJSONObject(0);
+            if(current==null||!account.getString("salt").equals(current.getString("salt"))
+                ||!account.getString("verifier").equals(current.getString("verifier")))
+                throw new Exception("الاسم أو كلمة السر غير صحيحة.");
+            return issueSession(name,owner);
+        }
+    }
+    private JSONObject issueSession(String name,boolean owner)throws Exception{
+        String token=random(32);
+        long now=System.currentTimeMillis();
+        db.execSQL("DELETE FROM sessions WHERE (owner=1 AND created<=?) OR (owner=0 AND created<=?)",
+            new Object[]{now-7*DAY,now-30*DAY});
+        db.execSQL("INSERT INTO sessions(token_hash,name,owner,created) VALUES(?,?,?,?)",
+            new Object[]{tokenHash(token),name,owner?1:0,now});
+        db.execSQL("UPDATE accounts SET last_seen=? WHERE name=?",new Object[]{now,name});
+        return obj("token",token,"name",name);
+    }
+    private Object handleLocked(boolean owner,JSONObject p)throws Exception{
+        String op=check(p,"op",40);
+        if(op.equals("status")||op.equals("setup")){
+            boolean first=owner&&rows("SELECT 1 FROM accounts WHERE owner=1").length()==0;
+            if(op.equals("status"))return obj("setup",first);
+            if(!first)throw new Exception("العملية للمالك.");
+            account(p,true);
+            return issueSession(check(p,"name",80),true);
         }
         String token=p.optString("token","");
         if(token.isEmpty()||token.length()>128)throw new Exception("انتهت الجلسة. سجّل الدخول مجددًا.");
         String digest=tokenHash(token);
-        JSONArray matches=rows("SELECT s.name FROM sessions s JOIN accounts a ON a.name=s.name AND a.owner=s.owner WHERE s.token_hash=? AND s.owner=?",
-            digest,owner?"1":"0");
+        JSONArray matches=rows("SELECT s.name FROM sessions s JOIN accounts a ON a.name=s.name AND a.owner=s.owner WHERE s.token_hash=? AND s.owner=? AND a.active=1 AND s.created>?",
+            digest,owner?"1":"0",Long.toString(System.currentTimeMillis()-(owner?7:30)*DAY));
         JSONObject active=matches.optJSONObject(0);
         if(active==null)throw new Exception("انتهت الجلسة. سجّل الدخول مجددًا.");
         String name=active.getString("name");
@@ -202,18 +229,19 @@ final class RoomStore {
         switch(op){
         case "resume":return obj("name",name);
         case "logout":db.execSQL("DELETE FROM sessions WHERE token_hash=? AND owner=?",new Object[]{digest,owner?1:0});return obj();
-        case "home":return obj("subjects",rows("SELECT s.*, (SELECT count(*) FROM sources d WHERE d.subject=s.id) AS docs FROM subjects s ORDER BY s.id"),"notices",rows("SELECT * FROM posts ORDER BY id DESC LIMIT 80"),"feedback",owner?rows("SELECT * FROM feedback ORDER BY id DESC LIMIT 200"):rows("SELECT * FROM feedback WHERE name=? ORDER BY id DESC LIMIT 200",name),"students",owner?rows("SELECT a.name,a.last_seen,"+
+        case "home":return obj("subjects",rows("SELECT s.*, (SELECT count(*) FROM sources d WHERE d.subject=s.id) AS docs FROM subjects s ORDER BY s.id"),"notices",rows("SELECT * FROM posts ORDER BY id DESC LIMIT 80"),"feedback",owner?rows("SELECT * FROM feedback ORDER BY id DESC LIMIT 200"):rows("SELECT * FROM feedback WHERE name=? ORDER BY id DESC LIMIT 200",name),"students",owner?rows("SELECT a.name,a.last_seen,a.active,"+
             "(SELECT count(*) FROM sources d WHERE d.added_by=a.name) AS sources,"+
             "(SELECT count(*) FROM results r WHERE r.name=a.name) AS quizzes,"+
             "(SELECT count(*) FROM feedback f WHERE f.name=a.name) AS suggestions "+
             "FROM accounts a WHERE a.owner=0 ORDER BY a.name"):new JSONArray());
-        case "subject":return obj("sources",rows("SELECT id,title,created,added_by FROM sources WHERE subject=? ORDER BY created DESC,id DESC",sub),"quizzes",rows("SELECT id,title,published FROM quizzes WHERE subject=? AND (published=1 OR ?='1') ORDER BY id DESC",sub,owner?"1":"0"));
-        case "source":return rows("SELECT title,body,image,created,added_by FROM sources WHERE id=?",id).getJSONObject(0);
+        case "subject":return obj("sources",rows("SELECT id,title,created,added_by FROM sources WHERE subject=? ORDER BY created DESC,id DESC",sub),"pending",owner?rows("SELECT id,title,body,student FROM source_queue WHERE subject=? ORDER BY id LIMIT 100",sub):new JSONArray(),"quizzes",rows("SELECT id,title,published FROM quizzes WHERE subject=? AND (published=1 OR ?='1') ORDER BY id DESC",sub,owner?"1":"0"));
+        case "source":return rows("SELECT title,body,CASE WHEN ?='1' OR EXISTS(SELECT 1 FROM accounts WHERE owner=1 AND name=sources.added_by) THEN image END AS image,created,added_by FROM sources WHERE id=?",owner?"1":"0",id).getJSONObject(0);
         case "quiz":return rows("SELECT title,question,choices FROM quizzes WHERE id=? AND (published=1 OR ?='1')",id,owner?"1":"0").getJSONObject(0);
         case "solve":{
             JSONObject q=rows("SELECT answer,choices FROM quizzes WHERE id=? AND published=1",id).getJSONObject(0);
             int choice=p.getInt("choice");
             if(choice<0||choice>=new JSONArray(q.getString("choices")).length())throw new Exception("اختر إجابة.");
+            if(rows("SELECT 1 FROM results WHERE quiz=? AND name=? LIMIT 1",id,name).length()>0)throw new Exception("سبق أن سلّمت هذا الاختبار.");
             int answer=q.getInt("answer");
             db.execSQL("INSERT INTO results(quiz,name,choice,correct,created) VALUES(?,?,?,?,?)",new Object[]{id,name,choice,answer==choice?1:0,System.currentTimeMillis()});
             return obj("answer",answer);
@@ -227,13 +255,61 @@ final class RoomStore {
             String title=check(p,"title",180),body=check(p,"body",16000);
             String topic=java.text.Normalizer.normalize(title,java.text.Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).replaceAll("[\\u064B-\\u065Fـ]","").replaceAll("[أإآ]","ا").replaceAll("^(شرح|ملخص|مراجعة)\\s+","").trim();
             if(rows("SELECT id FROM sources WHERE subject=? AND topic=?",sub,topic).length()>0)throw new Exception("هذا المصدر موجود مسبقًا.");
-            String image=check(p,"image",550000);
-            if(!image.startsWith("data:image/jpeg;base64,/9j/"))throw new Exception("صورة غير صالحة.");
-            db.execSQL("INSERT INTO sources(subject,title,topic,body,image,created,added_by) VALUES(?,?,?,?,?,?,?)",new Object[]{sub,title,topic,body,image,System.currentTimeMillis(),name});return obj();
+            long now=System.currentTimeMillis();
+            if(owner){
+                String image=check(p,"image",550000);
+                if(!image.startsWith("data:image/jpeg;base64,/9j/"))throw new Exception("صورة غير صالحة.");
+                db.execSQL("INSERT INTO sources(subject,title,topic,body,image,created,added_by) VALUES(?,?,?,?,?,?,?)",
+                    new Object[]{sub,title,topic,body,image,now,name});return obj();
+            }
+            java.text.SimpleDateFormat calendar=new java.text.SimpleDateFormat("yyyy-MM-dd",Locale.US);
+            calendar.setTimeZone(TimeZone.getTimeZone("Asia/Damascus"));
+            String day=calendar.format(new Date(now));
+            JSONObject uploads=rows("SELECT count FROM source_uploads WHERE student=? AND day=?",name,day).optJSONObject(0);
+            if(uploads!=null&&uploads.getInt("count")>=5)throw new Exception("بلغت الحد اليومي للمساهمات.");
+            db.beginTransaction();
+            try{
+                db.execSQL("INSERT OR IGNORE INTO source_uploads(student,day,count) VALUES(?,?,0)",new Object[]{name,day});
+                db.execSQL("UPDATE source_uploads SET count=count+1 WHERE student=? AND day=?",new Object[]{name,day});
+                db.execSQL("INSERT INTO source_queue(subject,title,topic,body,created,student) VALUES(?,?,?,?,?,?)",
+                    new Object[]{sub,title,topic,body,now,name});
+                db.setTransactionSuccessful();
+            }finally{db.endTransaction();}
+            return obj("pending",true);
         }}
         if(!owner)throw new Exception("العملية للمالك فقط.");
         switch(op){
         case "account":account(p,false);break;
+        case "reviewSource":{
+            JSONObject draft=rows("SELECT * FROM source_queue WHERE id=?",id).optJSONObject(0);
+            if(draft==null)throw new Exception("المساهمة غير متاحة للمراجعة.");
+            db.beginTransaction();
+            try{
+                if(p.getBoolean("approve"))db.execSQL(
+                    "INSERT OR IGNORE INTO sources(subject,title,topic,body,created,added_by) VALUES(?,?,?,?,?,?)",
+                    new Object[]{draft.getInt("subject"),draft.getString("title"),draft.getString("topic"),check(p,"body",16000),
+                        System.currentTimeMillis(),draft.getString("student")});
+                db.execSQL("DELETE FROM source_queue WHERE id=?",new Object[]{id});
+                db.setTransactionSuccessful();
+            }finally{db.endTransaction();}
+            break;}
+        case "studentAccess":{
+            String student=check(p,"name",80);
+            if(rows("SELECT 1 FROM accounts WHERE name=? AND owner=0",student).length()==0)throw new Exception("الحساب غير موجود.");
+            db.beginTransaction();
+            try{
+                if(p.has("password")){
+                    String password=check(p,"password",128);
+                    if(password.length()<12)throw new Exception("كلمة السر تحتاج إلى 12 حرفًا على الأقل.");
+                    String salt=random(18), verifier=Base64.encodeToString(hash(password,salt),Base64.NO_WRAP);
+                    db.execSQL("UPDATE accounts SET salt=?,verifier=? WHERE name=? AND owner=0",new Object[]{salt,verifier,student});
+                }else{
+                    db.execSQL("UPDATE accounts SET active=? WHERE name=? AND owner=0",new Object[]{p.getBoolean("active")?1:0,student});
+                }
+                db.execSQL("DELETE FROM sessions WHERE name=? AND owner=0",new Object[]{student});
+                db.setTransactionSuccessful();
+            }finally{db.endTransaction();}
+            break;}
         case "addSubject":db.execSQL("INSERT INTO subjects(name) VALUES(?)",new Object[]{check(p,"name",80)});break;
         case "progress":{
             int page=p.getInt("page");if(page<1||page>10000)throw new Exception("أدخل رقم صفحة صحيحًا.");

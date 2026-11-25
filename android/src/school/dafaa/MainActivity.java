@@ -41,6 +41,7 @@ import java.nio.charset.StandardCharsets;
 public final class MainActivity extends Activity {
     private static final int PICK_IMAGE = 23;
     private String origin;
+    private String bundledOrigin = "";
     private WebView web;
     private String localName;
     private boolean atHome;
@@ -59,12 +60,13 @@ public final class MainActivity extends Activity {
             String address = config.readLine();
             if (address != null && !address.isEmpty()) origin = httpsOrigin(address);
         } catch (Exception ignored) {}
+        bundledOrigin = origin;
         if (origin.isEmpty()) {
             try { origin = httpsOrigin(getPreferences(MODE_PRIVATE).getString("origin", "")); }
             catch (Exception ignored) {}
         }
         Uri invitation = getIntent().getData();
-        if (invitation != null && "qumdorous".equals(invitation.getScheme()) && "join".equals(invitation.getHost())) {
+        if (bundledOrigin.isEmpty() && invitation != null && "qumdorous".equals(invitation.getScheme()) && "join".equals(invitation.getHost())) {
             try {
                 final String address = httpsOrigin(invitation.getQueryParameter("school"));
                 new android.app.AlertDialog.Builder(this).setTitle("الانضمام إلى الصف")
@@ -378,13 +380,13 @@ public final class MainActivity extends Activity {
         add(options,text(name,20,INK,true),0);
         section(options,"ملاحظاتي المحفوظة",w -> showLocalNotes(name,0));
         section(options,"الصف على شبكة الواي فاي",w -> openClassroom());
-        section(options,"ربط بعنوان المدرسة",w -> configureClass(options));
+        if (bundledOrigin.isEmpty()) section(options,"ربط بعنوان المدرسة",w -> configureClass(options));
         section(options,"تسجيل الخروج",w -> {localData().edit().putBoolean("remembered",false).apply();setup("");});
     }
 
     private void connect(String address) {
-        origin = address;
-        getPreferences(MODE_PRIVATE).edit().putString("origin", address).apply();
+        origin = bundledOrigin.isEmpty() ? address : bundledOrigin;
+        getPreferences(MODE_PRIVATE).edit().putString("origin", origin).apply();
         localName = null;
         openStudentApp();
     }

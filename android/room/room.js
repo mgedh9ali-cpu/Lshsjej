@@ -95,7 +95,7 @@ function pair(){return [hero('ربط الهاتف بالصف','الاتصال ع
     await go('login');}),button('العودة للمواد',()=>go('home'))];}
 function login(){
   const first=owner&&setup;
-  return [hero(owner?'لوحة قوم دروس':'قوم دروس',owner?'إدارة الصف':'مساحة الطالب'),form(first?'إنشاء حساب المالك':'تسجيل الدخول',[field('الاسم','name'),field(first?'كلمة السر · ٨ أحرف على الأقل':'كلمة السر','password','password')],first?'إنشاء اللوحة':'دخول',async d=>{
+  return [hero(owner?'لوحة قوم دروس':'قوم دروس',owner?'إدارة الصف':'مساحة الطالب'),form(first?'إنشاء حساب المالك':'تسجيل الدخول',[field('الاسم','name'),field(first?'كلمة السر · ١٢ حرفًا على الأقل':'كلمة السر','password','password')],first?'إنشاء اللوحة':'دخول',async d=>{
     const result=await rpc(first?'setup':'login',d);name=result.name;offline=false;savedSession=true;setup=false;await go('home');
   }),!owner&&button('تغيير رمز الصف',()=>go('pair')),!owner&&button('العودة للمواد',()=>go('home'))];
 }
@@ -117,7 +117,24 @@ const date=v=>new Intl.DateTimeFormat('ar-SY',{weekday:'long',month:'long',day:'
 function feedback(){if(offline)return [hero('اقتراحاتي','صندوق الطالب'),el('p','اربط حساب الصف لإرسال اقتراح وقراءة ردّ المالك.'),button('إعدادات الصف',()=>go('settings'))];return [hero(owner?'صندوق الاقتراحات':'اقتراحاتي',owner?'مراجعة رسائل الطلاب':'رسائلي وردود المالك'),!owner&&form('اقتراح جديد',[field('اكتب اقتراحك','body','textarea')],'إرسال للمالك',async d=>{await rpc('suggest',d);await go('feedback');}),
   ...cache.feedback.map(f=>wrap('card',el('small',f.name+' · '+date(f.created)),el('pre',f.body),el('b',f.reply?'رد المالك':'بانتظار الرد'),el('pre',f.reply||''),...(owner?[form('الرد',[field('نص الرد','body','textarea',f.reply||'')],'حفظ الرد',async d=>{await rpc('reply',{...d,id:f.id});await go('feedback');})]:[]))),button('تحديث',()=>go('feedback'))];}
 const dateTime=v=>new Intl.DateTimeFormat('ar-SY',{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}).format(v);
-function accounts(){return [hero('طلاب الصف',cache.students.length+' حسابات'),form('حساب طالب جديد',[field('اسم الطالب','name'),field('كلمة السر · ٨ أحرف على الأقل','password','password')],'إنشاء الحساب',async d=>{await rpc('account',d);await go('accounts');}),...cache.students.map(a=>wrap('card',el('strong',a.name),el('small',a.last_seen?'آخر نشاط: '+dateTime(a.last_seen):'لم يسجّل الدخول بعد'),el('p','مصادر أضافها: '+a.sources+' · اختبارات أجاب عنها: '+a.quizzes+' · اقتراحات: '+a.suggestions)))];}
+function accounts(){
+  return [
+    hero('طلاب الصف',cache.students.length+' حسابات'),
+    form('حساب طالب جديد',[field('اسم الطالب','name'),field('كلمة السر · ١٢ حرفًا على الأقل','password','password')],'إنشاء الحساب',async d=>{
+      await rpc('account',d);await go('accounts');
+    }),
+    ...cache.students.map(a=>wrap('card',el('strong',a.name),
+      el('small',a.active?(a.last_seen?'آخر نشاط: '+dateTime(a.last_seen):'لم يسجّل الدخول بعد'):'الحساب معطّل'),
+      el('p','مصادر أضافها: '+a.sources+' · اختبارات أجاب عنها: '+a.quizzes+' · اقتراحات: '+a.suggestions),
+      button(a.active?'تعطيل الحساب':'تفعيل الحساب',async()=>{
+        if(a.active&&!confirm('تعطيل هذا الحساب وإنهاء جلساته؟'))return;
+        await rpc('studentAccess',{name:a.name,active:!a.active});await go('accounts');
+      }),
+      form('إعادة تعيين كلمة السر',[field('كلمة السر الجديدة · ١٢ حرفًا على الأقل','password','password')],'حفظ كلمة السر',async d=>{
+        await rpc('studentAccess',{name:a.name,password:d.password});await go('accounts');message('حُفظت كلمة السر وأُغلقت الجلسات السابقة.');
+      })))
+  ];
+}
 function settings(){
   const code=el('pre');
   return [hero('الإعدادات',name||'قوم دروس'),offline&&button(paired?(savedSession?'الاتصال بالصف':'تسجيل الدخول إلى الصف'):'ربط حساب الصف',async()=>{
@@ -151,7 +168,7 @@ function ocr(bytes){
 }
 function sourceForm(){
   const upload=field('صورة من المعرض','file','file');upload.querySelector('input').accept='image/jpeg,image/png,image/webp';
-  return form('إضافة مصدر',[upload],offline?'قراءة الصورة وحفظ المصدر':'قراءة الصورة ونشر المصدر',async(d,status)=>{
+  return form('إضافة مصدر',[upload],offline?'قراءة الصورة وحفظ المصدر':owner?'قراءة الصورة ونشر المصدر':'إرسال النص للمراجعة',async(d,status)=>{
     if(!d.file.size||d.file.size>5000000)throw Error('اختر صورة حتى ٥ ميغابايت.');
     const bmp=await createImageBitmap(d.file),canvas=el('canvas'),scale=Math.min(1,1900/Math.max(bmp.width,bmp.height));canvas.width=Math.max(1,Math.round(bmp.width*scale));canvas.height=Math.max(1,Math.round(bmp.height*scale));
     const ctx=canvas.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(bmp,0,0,canvas.width,canvas.height);bmp.close();
@@ -159,8 +176,10 @@ function sourceForm(){
     const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.92));
     const body=await ocr(await blob.arrayBuffer());let image=canvas.toDataURL('image/jpeg',.65);
     if(image.length>550000)image=canvas.toDataURL('image/jpeg',.35);
-    if(image.length>550000)throw Error('قص الصورة حول نص الصفحة ثم أعد المحاولة.');
-    await rpc('addSource',{subject:selected.id,title:body.trim().split('\n')[0].slice(0,180),body,image});await go('subject',selected);
+    if((owner||offline)&&image.length>550000)throw Error('قص الصورة حول نص الصفحة ثم أعد المحاولة.');
+    const saved=await rpc('addSource',{subject:selected.id,title:body.trim().split('\n')[0].slice(0,180),body,...(owner||offline?{image}:{})});
+    await go('subject',selected);
+    if(saved?.pending)message('أُرسل النص إلى المالك للمراجعة.');
   });
 }
 let tab='sources';
@@ -176,10 +195,18 @@ async function subject(item){
   const items=[];let count=0;const dayCounts={};for(const d of content.sources){const k=date(d.created);dayCounts[k]=(dayCounts[k]||0)+1;}
   for(const d of content.sources){const day=date(d.created);if(day!==last){items.push(el('h2',day));last=day;count=dayCounts[day];}items.push(button('مصدر '+count--+' · '+d.title+(owner&&d.added_by?' · '+d.added_by:''),()=>go('source',d),'tile'));}
   const add=el('details','','add-source');add.append(el('summary','＋ إضافة صورة مصدر'),sourceForm());
-  return [hero(s.name,s.page?'وصل الصف إلى صفحة '+s.page:'مكتبة المادة'),controls,el('h2','مصادر المادة'),offline&&locked?button('فتح مصادري المحفوظة',()=>go('unlock')):add,...items,owner&&form('تقدّم الصف',[field('رقم الصفحة','page','number',s.page||'')],'حفظ الصفحة',async d=>{await rpc('progress',{subject:s.id,page:Number(d.page)});await go('subject',s);})];
+  const pending=owner?(content.pending||[]).map(draft=>wrap('card',
+    el('h3',draft.title),el('small',draft.student),
+    form('مراجعة المساهمة',[field('النص المراد نشره','body','textarea',draft.body)],'اعتماد ونشر',async d=>{
+      await rpc('reviewSource',{id:draft.id,approve:true,body:d.body});await go('subject',s);
+    }),button('رفض المساهمة',async()=>{
+      if(!confirm('رفض هذه المساهمة؟'))return;
+      await rpc('reviewSource',{id:draft.id,approve:false});await go('subject',s);
+    }))):[];
+  return [hero(s.name,s.page?'وصل الصف إلى صفحة '+s.page:'مكتبة المادة'),controls,...(pending.length?[el('h2','المساهمات بانتظار المراجعة'),...pending]:[]),el('h2','مصادر المادة'),offline&&locked?button('فتح مصادري المحفوظة',()=>go('unlock')):add,...items,owner&&form('تقدّم الصف',[field('رقم الصفحة','page','number',s.page||'')],'حفظ الصفحة',async d=>{await rpc('progress',{subject:s.id,page:Number(d.page)});await go('subject',s);})];
 }
-async function source(item){const record=await rpc('source',{id:item.id});const img=el('img');img.src=record.image instanceof Blob?(previewUrl=URL.createObjectURL(record.image)):record.image;img.alt='صورة المصدر';
-  return [button('العودة للمادة',()=>go('subject',selected)),hero(record.title,date(record.created)+(owner&&record.added_by?' · أضافه '+record.added_by:'')),wrap('card',el('pre',record.body),img),owner&&button('حذف المصدر',async()=>{if(confirm('حذف هذا المصدر من الصف؟')){await rpc('remove',{id:item.id});await go('subject',selected);}})];}
+async function source(item){const record=await rpc('source',{id:item.id});const img=el('img');img.src=record.image instanceof Blob?(previewUrl=URL.createObjectURL(record.image)):(record.image||'');img.alt='صورة المصدر';
+  return [button('العودة للمادة',()=>go('subject',selected)),hero(record.title,date(record.created)+(owner&&record.added_by?' · أضافه '+record.added_by:'')),wrap('card',el('pre',record.body),...(record.image?[img]:[])),owner&&button('حذف المصدر',async()=>{if(confirm('حذف هذا المصدر من الصف؟')){await rpc('remove',{id:item.id});await go('subject',selected);}})];}
 async function quiz(item){const q=await rpc('quiz',{id:item.id}),choices=JSON.parse(q.choices),result=el('p');
   return [hero(q.title,selected.name),wrap('card',el('h3',q.question),...choices.map((v,i)=>button(v,async()=>{if(owner){message('معاينة المالك');return;}const score=await rpc('solve',{id:item.id,choice:i});result.textContent=i===score.answer?'إجابة صحيحة':'الإجابة الصحيحة · '+choices[score.answer];})),result),button('العودة للمادة',()=>go('subject',selected))];}
 window.backPage=()=>{if(!drawer.hidden){closeDrawer(true);return true;}if(page==='source'||page==='quiz'){go('subject',selected);return true;}if(!owner&&(page==='pair'||page==='login')){go('home');return true;}if((name||offline)&&page!=='home'){go('home');return true;}return false;};

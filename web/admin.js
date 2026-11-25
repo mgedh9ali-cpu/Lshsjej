@@ -1,4 +1,4 @@
-import { app, nav, el, button, heading, line, input, select, api, form, login, temporary, logout, empty, errorView, date, archiveView, imageFile } from './common.js';
+import { app, nav, el, button, heading, line, input, select, api, form, login, temporary, logout, empty, errorView, date, archiveView, imageFile, focusPage, routeButton, installRoutes } from './common.js';
 
 let me;
 let sequence = 0;
@@ -9,7 +9,7 @@ const textField = (name, label, value = '') => line(label, input(name, { ...requ
 const area = (name, value = '', props = {}) => el('textarea', { name, rows: 5, ...required, ...props }, value);
 const card = (...children) => el('article', { class: 'card' }, children);
 const grants = [['quizzes', 'مسودات الاختبارات'], ['notices', 'مسودات الأخبار والتذكيرات'], ['publishNotices', 'نشر الأخبار والتذكيرات']];
-const action = (label, fn) => {
+const action = (label, fn, className) => {
   const status = el('span', { role: 'status', class: 'message' });
   const control = button(label, async () => {
     control.disabled = true;
@@ -17,7 +17,7 @@ const action = (label, fn) => {
     try { status.textContent = (await fn()) || 'تم التنفيذ.'; }
     catch (error) { status.textContent = error.message; }
     finally { control.disabled = false; }
-  });
+  }, className);
   return el('div', { class: 'actions' }, control, status);
 };
 const show = fn => async feedback => {
@@ -25,7 +25,10 @@ const show = fn => async feedback => {
   app.replaceChildren(el('p', { role: 'status' }, 'جارٍ التحميل…'));
   try {
     const view = await fn();
-    if (sequence === current) app.replaceChildren(...view, ...(typeof feedback === 'string' ? [el('p', { role: 'status' }, feedback)] : []));
+    if (sequence === current) {
+      app.replaceChildren(...view, ...(typeof feedback === 'string' ? [el('p', { role: 'status' }, feedback)] : []));
+      focusPage();
+    }
   } catch (error) { if (sequence === current) errorView(error); }
 };
 const picker = (subjects, optional = false, value = '') => {
@@ -36,14 +39,20 @@ const picker = (subjects, optional = false, value = '') => {
 const permissionInputs = chosen => grants.map(([key, label]) =>
   el('label', { class: 'option' }, input(key, { type: 'checkbox', checked: chosen.includes(key) }), label));
 const permissionValues = data => grants.map(([key]) => key).filter(key => data[key]);
-const credentials = records => records.map(record => record.name + ' · ' + record.username + ' · ' + record.password).join('\n');
+const credentials = records => el('section', { class: 'credential-cards', 'aria-label': 'بيانات الدخول' },
+  records.map(record => card(el('h3', {}, record.name),
+    el('p', {}, 'رمز الحساب ', el('bdi', {}, record.username)),
+    el('p', {}, 'كلمة المرور المؤقتة ', el('bdi', {}, record.password)))),
+  button('طباعة البطاقات', () => window.print()));
 const accountPage = show(async () => {
   const items = await api('/accounts');
   const afterCreate = async (payload, message, element) => {
+    document.querySelector('.credential-cards')?.remove();
     const accounts = await api('/accounts', payload);
     element.reset();
-    message.textContent = credentials(accounts);
-    message.append(' ', button('تحديث القائمة', accountPage));
+    element.querySelector('.credential-cards')?.remove();
+    element.append(credentials(accounts));
+    message.textContent = 'أُنشئت الحسابات.';
   };
   return [heading('الحسابات', 'أنشئ حسابات الطلاب والمساعدين من هنا.'), el('div', { class: 'grid' },
     form([textField('name', 'الاسم الحقيقي'), textField('username', 'اسم المستخدم بالإنجليزية'),
@@ -61,9 +70,16 @@ const accountPage = show(async () => {
       })),
     el('h2', {}, 'الحسابات الحالية'), items.length ? el('div', { class: 'grid' }, items.map(item => card(
       el('h3', {}, item.name), el('p', {}, item.username + ' · ' + (item.role === 'student' ? 'طالب' : 'مساعد') + ' · ' + (item.active ? 'فعّال' : 'معطّل')),
-      action('إعادة تعيين كلمة المرور', async () => {
+      button('إعادة تعيين كلمة المرور', async event => {
         if (!window.confirm('إعادة التعيين ستنهي جلسات هذا الحساب. المتابعة؟')) return;
-        return 'كلمة المرور المؤقتة · ' + (await api('/account', { id: item.id, action: 'reset' })).password;
+        const control = event.currentTarget;
+        control.disabled = true;
+        try {
+          document.querySelector('.credential-cards')?.remove();
+          const { password } = await api('/account', { id: item.id, action: 'reset' });
+          control.after(credentials([{ ...item, password }]));
+        } catch (error) { errorView(error); }
+        finally { control.disabled = false; }
       }),
       action(item.active ? 'تعطيل الحساب' : 'تفعيل الحساب', async () => {
         await api('/account', { id: item.id, active: !item.active });
@@ -71,10 +87,10 @@ const accountPage = show(async () => {
       }), item.role === 'assistant' && form(permissionInputs(item.permissions), 'حفظ الصلاحيات', async (data, message) => {
         await api('/account', { id: item.id, action: 'permissions', permissions: permissionValues(data) });
         message.textContent = 'حُفظت الصلاحيات.';
-      })))) : empty('ما في حسابات بعد.')];
+      })))) : empty('لا توجد حسابات حتى الآن.')];
 });
 const documentsPage = show(async () => {
-  const [subjects, docs] = await Promise.all([api('/subjects'), api('/documents')]);
+  const [subjects, docs, queue] = await Promise.all([api('/subjects'), api('/documents'), api('/submission-review')]);
   const editor = item => form([picker(subjects, false, item?.subject), textField('title', 'العنوان', item?.title),
     line('محتوى المستند', area('body', item?.body))], 'حفظ المستند', async data => {
     await api('/documents', { ...data, id: item?.id });
@@ -82,8 +98,23 @@ const documentsPage = show(async () => {
   });
   return [heading('المواد والمستندات'), el('div', { class: 'grid' },
     form([textField('name', 'اسم المادة الجديدة')], 'إضافة مادة', async data => { await api('/subjects', data); documentsPage(); }),
-    editor()), el('h2', {}, 'المستندات المنشورة'), ...docs.map(item =>
-      el('details', { class: 'card' }, el('summary', {}, item.title + ' · ' + item.subjectName), editor(item)))];
+    editor()), el('h2', {}, 'المساهمات بانتظار المراجعة'),
+    queue.length ? el('div', { class: 'stack' }, queue.map(item => el('details', { class: 'card' },
+      el('summary', {}, item.title + ' · ' + item.subjectName + ' · ' + item.studentName),
+      form([textField('title', 'العنوان', item.title), line('النص المراد نشره', area('body', item.body))], 'اعتماد ونشر',
+        async data => { await api('/submission-review', { ...data, id: item.id, action: 'approve' }); documentsPage(); }),
+      action('رفض المساهمة', async () => {
+        if (!confirm('رفض هذه المساهمة؟')) return;
+        await api('/submission-review', { id: item.id, action: 'reject' });
+        documentsPage();
+      })))) : empty('لا توجد مساهمات بانتظار المراجعة.'),
+    el('h2', {}, 'المستندات المنشورة'), ...docs.map(item =>
+      el('details', { class: 'card' }, el('summary', {}, item.title + ' · ' + item.subjectName), editor(item),
+        action('حذف المستند', async () => {
+          if (!confirm('حذف المستند من المكتبة؟')) return;
+          await api('/document-remove', { id: item.id });
+          documentsPage();
+        }, 'danger')))];
 });
 const archivePage = selected => show(async () => {
   const subjects = await api('/subjects');
@@ -232,16 +263,23 @@ const suggestionsPage = show(async () => {
         await api('/reply-suggestion', { id: item.id, body: data.body });
         message.textContent = 'وصل الرد إلى صندوق الطالب.';
       }))) :
-    [empty('ما وصل أي اقتراح بعد.')])];
+    [empty('لم يصل أي اقتراح حتى الآن.')])];
 });
 function ready(user) {
   me = user;
   nav.replaceChildren(logout());
   if (user.temporary) { temporary(ready); return; }
-  nav.prepend(button('الرئيسية', dashboard),
-    ...(owner() ? [button('الحسابات', accountPage), button('اقتراحات الطلاب', suggestionsPage), button('المواد والمستندات', documentsPage), button('الأرشيف اليومي', archivePage()), button('سجل التغييرات', auditPage)] : []),
-    ...(can('quizzes') ? [button('الاختبارات', quizzesPage)] : []),
-    ...(can('notices') || can('publishNotices') ? [button('الأخبار والتذكيرات', noticesPage)] : []));
-  dashboard();
+  const routes = [
+    ['home', 'الرئيسية', dashboard],
+    ...(owner() ? [
+      ['accounts', 'الحسابات', accountPage], ['suggestions', 'اقتراحات الطلاب', suggestionsPage],
+      ['documents', 'المواد والمستندات', documentsPage], ['archive', 'الأرشيف اليومي', archivePage()],
+      ['audit', 'سجل التغييرات', auditPage],
+    ] : []),
+    ...(can('quizzes') ? [['quizzes', 'الاختبارات', quizzesPage]] : []),
+    ...(can('notices') || can('publishNotices') ? [['notices', 'الأخبار والتذكيرات', noticesPage]] : []),
+  ];
+  nav.prepend(...routes.map(([path, label]) => routeButton(label, path)));
+  installRoutes(path => routes.find(([key]) => key === path)?.[2], 'home');
 }
 api('/me').then(ready).catch(error => error.status === 401 ? login('admin', ready) : errorView(error));
