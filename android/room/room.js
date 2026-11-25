@@ -489,42 +489,34 @@ async function prepareSourceImage(file){
     throw Error('تعذّر تجهيز الصورة. اختر صورة أصغر.');
   }finally{bitmap.close();}
 }
-function fileBase64(file){
-  return new Promise((resolve,reject)=>{
-    const reader=new FileReader();
-    reader.onload=()=>resolve(reader.result.split(',')[1]);
-    reader.onerror=()=>reject(Error('تعذّرت قراءة الملف.'));
-    reader.readAsDataURL(file);
-  });
-}
 function sourceForm(subject){
-  const upload=field('اختيار صورة أو ملف','file','file');
+  const upload=field('اختيار صورة أو ملف · حتى ٦٠٠ ميغابايت','file','file');
   upload.className='source-picker';
   const title=field('عنوان المصدر','title');
   title.querySelector('input').maxLength=180;
-  let previousPayload='',requestId='';
+  let previousTitle,requestId;
+  upload.querySelector('input').addEventListener('change',()=>{requestId=undefined;});
   const progress=el('progress');
   progress.max=100;progress.hidden=true;progress.setAttribute('aria-label','رفع المصدر');
   return form('',[title,upload,progress],'نشر في '+subject.name,async (data,status)=>{
     const title=data.title.trim(), selectedFile=data.file;
     if(!title)throw Error('اكتب عنوان المصدر.');
     if(!selectedFile.size)throw Error('اختر صورة أو ملفًا.');
+    if(selectedFile.size>600000000)throw Error('حجم الملف يجب ألا يتجاوز ٦٠٠ ميغابايت.');
     progress.hidden=true;
     status.textContent='جارٍ تجهيز الملف…';
-    let attachment;
-    if(['image/jpeg','image/png','image/webp'].includes(selectedFile.type)){
-      attachment={image:await prepareSourceImage(selectedFile)};
-    }else{
-      if(selectedFile.size>1048576)throw Error('حجم الملف يجب ألا يتجاوز ١ ميغابايت.');
-      attachment={file:{name:selectedFile.name,base64:await fileBase64(selectedFile)}};
+    const previewable=selectedFile.size<=15000000 && ['image/jpeg','image/png','image/webp'].includes(selectedFile.type);
+    if(!requestId || previousTitle!==title){
+      previousTitle=title;requestId=crypto.randomUUID();
     }
-    const payload=JSON.stringify({title,...attachment});
-    if(previousPayload!==payload){previousPayload=payload;requestId=crypto.randomUUID();}
+    const details={subject:subject.name,title,requestId};
+    const attachment=previewable?{image:await prepareSourceImage(selectedFile)}:
+      {name:selectedFile.name,size:selectedFile.size};
     progress.value=0;progress.hidden=false;
     status.textContent='بدأ رفع الملف…';
     try{
-      await rpc('sharedPublish',{subject:subject.name,title,...attachment,requestId},(bytes,total)=>{
-        progress.value=Math.floor(100*bytes/total);
+      await rpc(previewable?'sharedPublish':'sharedUploadFile',{...details,...attachment},(bytes,total)=>{
+      progress.value=Math.floor(100*bytes/total);
         status.textContent=bytes===total?'اكتمل رفع الملف، بانتظار تأكيد النشر…':'جارٍ رفع الملف · '+number.format(progress.value)+'٪';
       });
     }catch(error){progress.hidden=true;throw error;}
